@@ -60,7 +60,7 @@ func main() {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		fail(fmt.Errorf("Ergo did not come up; see %s", logPath))
+		fail(fmt.Errorf("the local Ergo did not come up; see %s", logPath))
 	case "serve":
 		s, err := ergo.Start(ergo.Options{Port: port, Defaults: true})
 		if err != nil {
