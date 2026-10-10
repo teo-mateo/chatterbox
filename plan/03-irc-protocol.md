@@ -1,6 +1,6 @@
 # 03. IRC protocol behavior
 
-Developed against Ergo 2.19. Items marked (Sn) depend on a spike in [08-risks-and-spikes.md](08-risks-and-spikes.md).
+Developed against Ergo 2.19. Items marked (Sn) depend on a spike in [08-risks-and-spikes.md](08-risks-and-spikes.md); all of them have been run and this file reflects their results.
 
 ## 1. Connecting and registering (FR1.1, FR1.2, FR1.4)
 
@@ -8,7 +8,7 @@ Developed against Ergo 2.19. Items marked (Sn) depend on a spike in [08-risks-an
 2. `CAP LS 302`.
 3. `CAP REQ` for the capabilities below, then `NICK <nick>`, `USER <nick> 0 * :chatterbox agent`, `CAP END`.
 4. On `001`: parse the `005` tokens.
-5. `MODE <nick> +B`, with the mode letter from the `BOT` token. Confirm through the `MODE` echo. If the server has no `BOT` token or refuses the mode, the listener exits: FR1.2 cannot be met (S1, S10).
+5. `MODE <nick> +B`, with the mode letter from the `BOT` token, sent with a label. Confirm through the `MODE` echo. If the server has no `BOT` token or refuses the mode, the listener exits: FR1.2 cannot be met (S1, S10).
 6. `JOIN <#channel>`. Joined when the server echoes the `JOIN` and `366` (end of names) arrives.
 7. From the `JOIN` echo, record the listener's own `nick!user@host` (needed for the line budget) and the echo's `time` tag (the server-side moment the listener became present; used by catch-up).
 
@@ -25,8 +25,9 @@ Developed against Ergo 2.19. Items marked (Sn) depend on a spike in [08-risks-an
 | `labeled-response` | correlating echoes and errors with requests | exit |
 | `standard-replies` | readable `FAIL` reasons | continue |
 | `multi-prefix` | operator check for `create-channel` | continue |
+| `draft/event-playback` | history then carries joins and quits as themselves, which the listener ignores. Without it Ergo replays them as chat lines from a pseudo-user `HistServ`, which would be printed (S4). It also puts the listener's own join, with its `msgid`, into history, which is what makes a gap detectable (§6) | continue |
 
-Not requested: `draft/event-playback` (would replay joins and quits), `extended-join`, `account-*`, `away-notify`, `sasl`.
+Not requested: `extended-join`, `account-*`, `away-notify`, `sasl`.
 
 Exiting when a required capability is missing is deliberate: the issue names an IRCv3 server as the prerequisite, and silent degradation would break FR1.6 or FR3.4 unnoticed. The error names the missing capability.
 
@@ -45,6 +46,7 @@ Exiting when a required capability is missing is deliberate: the issue names an 
 ## 2. Staying connected and leaving (FR1.5)
 
 - Answer server `PING`. Send a client `PING` every 30 s; 90 s without any incoming line is connection loss.
+- Both timers allow for the server's flood control (S9): after the listener has sent many lines the server stops reading from the connection for about half a second per line, and says nothing. The listener keeps an estimate of when the server will have caught up (`busyUntil`: each unit written adds its line count times `tuning.ack_per_line`). Until then it sends no `PING`, which would only queue behind the rest, and it counts the 90 s from that moment. A keepalive faster than the server's rate of two commands per second would by itself keep the connection throttled; the test tuning stays well above that.
 - SIGINT, SIGTERM, SIGHUP: `QUIT :chatterbox listener stopped`, wait up to 2 s for the server to close, remove the socket, exit 0.
 - SIGKILL or a crash: the kernel closes the TCP connection and the server removes the nickname at once.
 - `KICK` naming the listener: exit 6 with the kicker and reason (D14).
@@ -56,7 +58,7 @@ A listener that outlives its agent makes presence lie. Detection, in layers:
 
 1. **SIGPIPE is ignored** at startup. By default a Go program is killed by SIGPIPE when it writes to a closed stdout or stderr, which would skip the clean exit. With the signal ignored, the write fails with an error and the listener shuts down normally. A failed stderr write is ignored.
 2. **stdout hang-up**: when stdout is a pipe, the listener polls it for hang-up every 2 s, so a quiet channel does not hide a dead reader.
-3. **stdout not a pipe** (a harness that redirects background output to a file): neither of the above ever fires. How the target harnesses run background processes, and whether watching the parent process is reliable there, is spike S14. Depending on its result the listener also exits when its original parent process disappears. Until then this case is a known gap (R8), and the agent instructions say to stop the listener when the work is done.
+3. **stdout not a pipe**: Claude Code redirects a background command's output to a file (S14), so neither of the above ever fires there. The listener therefore watches the **chain of processes that started it**: its parent, the parent's parent and so on, up to and including the first one in another session (at most six, never `init`). A harness starts the command through a wrapper shell in a session of its own; the harness itself is then the first ancestor in another session. Every 2 s the listener checks that each process of the chain is still the parent of the one below it; when a link breaks it sends `QUIT` and exits 0. A listener started under `nohup` (SIGHUP ignored at start) watches nothing: it is meant to outlive its parents. Verified for Claude Code; other harnesses are unverified (R8), and the agent instructions say to stop the listener when the work is done.
 
 ## 3. Membership tracking
 
@@ -137,13 +139,13 @@ using the hostmask recorded at join. Tags do not count against this limit.
 
 Each message carries a fresh label. It is acknowledged by the labeled echo (the `PRIVMSG`, or the echoed batch). It fails on a labeled error numeric or `FAIL` (for example `404`, `401`, `FAIL BATCH MULTILINE_MAX_BYTES`).
 
-The acknowledgement timer starts when the unit's last line has been written, and allows 10 s plus 0.5 s per line of the unit, because the server's flood control processes about two lines per second after the initial burst (S9 measures this).
+The acknowledgement timer starts when the unit's last line has been written. It allows 10 s (`tuning.ack_base`) after the moment the server can be expected to have caught up with everything the listener has sent (`busyUntil`, §2). S9 showed why the unit's own size is the wrong measure: the server echoes a batch at once and then stalls whatever comes **next** for half a second per line, so a one-line message sent right after a 100-line one is legitimately answered 50 s later. The other labeled requests (`WHO`, `LIST`, `CHATHISTORY`) use the same rule with 30 s (`tuning.request_timeout`).
 
 Parts of a split message are sent one after another, each waiting for its acknowledgement. If one fails, the rest are not sent and the command reports how many were delivered.
 
 For private sends an unknown nickname comes back from the server as `401`. For addressed channel sends the listener checks membership first and fails with `unknown_nick` without sending.
 
-How Ergo labels a multiline echo and its failure replies is S6.
+The label is on the echoed opening `BATCH`. Ergo does not label `FAIL BATCH ...` (S6); since only one message is in flight at a time, an unlabeled `FAIL BATCH` fails that message.
 
 ## 6. Reconnection and catch-up (FR1.6)
 
@@ -163,7 +165,8 @@ After a reconnect and join, before `ready`:
 Details:
 
 - The reference is always a timestamp first, never an old `msgid`. What a server does with a `msgid` it no longer knows is not defined by the specification (S13), and an empty answer would be indistinguishable from "nothing missed".
-- If the oldest message returned in the first page is newer than `lastTime` and the listener had seen messages before, history may not reach back to the disconnect. Likewise if the server restarted and its in-memory history is gone, nothing comes back at all. The first is reported on stderr; the second cannot be detected (R6).
+- The reference also has an id: the `msgid` of the newest channel message seen, or of the listener's own `JOIN` echo before any message. Because of the overlap that entry must come back in the first page (the join is in history thanks to `draft/event-playback`). If it does not, history does not reach back to the disconnect: retention was exceeded, or the server restarted and its in-memory history is gone. Both are reported on stderr (R6, IT-RESTART).
+- Paging continues from the id of the newest entry of the page, whatever its kind, so a page full of joins does not end the catch-up.
 - `FAIL CHATHISTORY`: reported on stderr with a note that messages may have been missed; the listener continues to `ready`.
 - A `chathistory` batch the listener did not ask for (some configurations replay on join) is discarded. On the first connection nothing is replayed: the listener delivers what happens while it runs.
 - There is no cap on the number of replayed messages (D17).
@@ -191,7 +194,7 @@ Messages from humans arrive without the `bot` tag and are flagged `human`.
 ### `channels`
 
 1. `LIST` with a label: name and user count per channel. Channels the server hides do not appear.
-2. Last activity (D4): `CHATHISTORY LATEST <#chan> * 1`, taking the `time` of the returned message. The listener's own channel is looked up first, then the others, most populated first, up to `limits.channels_history_lookups` (50). Lookups stop after a time budget of 10 s; whatever has no answer by then is unknown. This keeps the command usable when the server's flood control slows repeated lookups.
+2. Last activity (D4): `CHATHISTORY LATEST <#chan> * 50`, taking the `time` of the newest chat message among the entries returned. One entry is not enough: history also holds joins and quits, and "someone joined" is not activity. A channel whose last 50 entries contain no message shows unknown. The listener's own channel is looked up first, then the others, most populated first, up to `limits.channels_history_lookups` (50). Lookups stop after a time budget of 10 s; whatever has no answer by then is unknown. This keeps the command usable when the server's flood control slows repeated lookups.
 3. A refused or empty lookup gives unknown. After the first refusal for a channel the listener is not in, the remaining non-member lookups are skipped for that invocation.
 4. Sorted by last activity, newest first, unknown last.
 
@@ -201,7 +204,7 @@ Messages from humans arrive without the `bot` tag and are flagged `human`.
 2. `LIST <#name>`: if listed, fail with `channel_exists`.
 3. `PRIVMSG <old> :moving to <#name>`.
 4. `PART <old>`, `JOIN <#name>`.
-5. Join refused (for example the server restricts channel creation, S8): go to step 7.
+5. Join refused (for example the server restricts channel creation; S8 found it allowed on the default configuration and on tiny2): go to step 7.
 6. The names reply shows the listener as operator: success. The new channel becomes **the listener's channel** from here on; reconnects rejoin it, not the original `--channel`. Catch-up state is reset. Respond with the new name.
 7. Otherwise (someone else created it first, typically a secret channel that `LIST` did not show): `PART <#name>` if joined, `JOIN <old>`, run catch-up for `<old>` from the saved `lastTime`, fail with `channel_exists`.
 8. If rejoining the old channel is refused, the listener exits 6 (D14).

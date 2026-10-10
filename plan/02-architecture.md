@@ -40,7 +40,7 @@ test/ergo/                    Ergo test configuration and launcher
 test/e2e/                     integration and acceptance tests
 ```
 
-Dependencies: Go standard library, `github.com/ergochat/irc-go/ircmsg`, one TOML library.
+Dependencies: Go standard library, `github.com/ergochat/irc-go` (`ircmsg` for parsing and tag escaping, `ircreader` for bounded line reading), `github.com/BurntSushi/toml`, and `golang.org/x/sys/unix` (peer credentials on macOS, `poll` for hang-up detection, process information for parent watching).
 
 Argument parsing is written on top of the standard `flag` package with flags allowed before, between and after positional arguments (04 §1). The standard package alone stops at the first positional argument, which would turn `send agentB --important x` into a message containing `--important`.
 
@@ -81,8 +81,10 @@ All timing values (keepalive interval, idle timeout, backoff bounds, acknowledge
 - **core**: single goroutine that owns all listener state (connection state, membership, pending labels, dedup set). Everything else talks to it over channels; no locks around state. The core never blocks on stdout or on the socket.
 - **writer**: the only writer to the connection (§5).
 - **control server**: accepts socket connections, one goroutine per request, forwards to the core and relays progress and the result.
-- **stdout writer**: the only writer to stdout. Takes lines from a bounded queue (10 000 lines) and writes each with a single `write` call.
-- **keepalive**: asks the writer to send `PING` every 30 s. No incoming line for 90 s is connection loss.
+- **stdout writer**: the only writer to stdout. Takes lines from a queue and writes each with a single `write` call. The queue's bound (10 000 lines) is soft: past it lines are still accepted, and the bound only starts the clock described under "Output back-pressure".
+- **agent watcher**: polls for a vanished stdout reader and a broken parent chain (03 §2).
+
+Keepalive, deadlines and backoff are not goroutines: the core checks them on a tick (every 100 ms, finer when the timings are tuned down).
 
 ### Output back-pressure
 

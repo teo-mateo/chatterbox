@@ -44,7 +44,7 @@ From Ergo 2.19's shipped `default.yaml` (the deployment on tiny2 may differ; S4,
 - Per IP address: 16 concurrent connections, 32 new connections per 10 minutes.
 - Any client may create a channel by joining it (`operator-only-creation: false`).
 
-Not yet verified: everything in the spike list of [08-risks-and-spikes.md](08-risks-and-spikes.md). A post-registration probe of tiny2 was not run.
+Verified on tiny2 on 2026-10-10 with two throwaway clients on a temporary channel (spikes S1, S3, S4, S8, S10, S11 in [08-risks-and-spikes.md](08-risks-and-spikes.md)): connections without SASL are accepted, a client can set `+B` on itself, joining a new channel creates it and makes the client operator, history is on and is not replayed on join, history of a channel the client is not in is refused, flood control is on. The `ISUPPORT` tokens are the same as on a default Ergo. The certificate's fingerprint is `SHA256:44:0D:EE:9D:D4:B1:BE:62:C6:6A:5F:DF:51:69:9E:B2:6F:89:07:40:5D:FE:48:0F:3B:54:36:30:71:0C:E0:BA`. How long tiny2 holds the nickname of a vanished client (S7) was not measured.
 
 ## 3. Decisions on the issue's open questions
 
@@ -105,7 +105,7 @@ Why: FR1.4 forbids choosing another name on collision, so a derived name gains l
 - Single static binary, trivial cross-compilation for the "same or different machines" case.
 - TLS with custom verification, Unix sockets with peer credentials, and concurrency are in the standard library.
 - Go 1.25 is installed on the development machine.
-- Dependencies: `github.com/ergochat/irc-go/ircmsg` (line parsing and tag escaping, from the Ergo authors) and one TOML parser. The connection state machine is written here, because the listener needs exact control over nick collision, batches, labels and reconnection.
+- Dependencies: `github.com/ergochat/irc-go` (line parsing and tag escaping, from the Ergo authors), `github.com/BurntSushi/toml`, and `golang.org/x/sys/unix` for the few system calls the standard library does not expose portably. The connection state machine is written here, because the listener needs exact control over nick collision, batches, labels and reconnection.
 
 ## 4. Interpretations and further decisions
 
@@ -200,7 +200,15 @@ After a reconnect the listener delivers everything the server returns for the ga
 
 Accepted by the issue owner on 2026-10-10: **D1**, **D2**, **D3**, **D4**, **D5**.
 
-Still needed:
+Still needed. **The implementation went ahead with every one of these as proposed here**, because each is confined to one place; none has been accepted yet:
 
-- Before M4: **D9**, **D11**, **D15**.
-- Any time before M8: D7, D8, D12, D17's stdout question, and the additions in §1.
+| Decision | If it goes the other way |
+|---|---|
+| **D9** strict "accepted" | the send path answers when the message is queued instead of when it is echoed: one function in the listener, and exit code 8 goes away |
+| **D11** 64 KiB cap | set `limits.max_message_bytes = 0` as the default |
+| **D15** no auto-detection for posting | `identity.ClassPosting.MayAutoDetect` returns true, plus the stderr notice |
+| D7 who prints an important message | `inbound.Printed` |
+| D8 what "addressed" means | `inbound.Classify` |
+| D12 default wake filter | one default in `config.Default` |
+| D17 a stdout line for a detected gap | one more line where the stderr diagnostic is written |
+| the additions in §1 | each is a flag or a field that can be removed |

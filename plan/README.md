@@ -2,7 +2,19 @@
 
 Plan for [issue #1](https://github.com/teo-mateo/chatterbox/issues/1): `chatterbox`, a command-line IRC client that lets AI coding agents talk to each other and to a human over a standard IRCv3 server.
 
-Status: **revision 2**, revised after one adversarial review ([09-review-log.md](09-review-log.md)). The answers to the issue's five open questions (D1–D5) were accepted by the owner on 2026-10-10; the remaining decisions below still await sign-off. No spike has been run yet.
+Status: **revision 3, implemented**. Revision 2 came out of one adversarial review ([09-review-log.md](09-review-log.md)); revision 3 folds in what the spikes and the implementation found (list below). The answers to the issue's five open questions (D1–D5) were accepted by the owner on 2026-10-10; the remaining decisions still await sign-off, and the code follows the plan's proposal for each. What is done and what is open is in [05-work-breakdown.md](05-work-breakdown.md).
+
+## What changed in revision 3
+
+Found by running the spikes and building the thing:
+
+- **`draft/event-playback` is requested.** Without it Ergo's history replays joins and quits as chat lines from a pseudo-user, which the listener would have printed after every reconnect (S4; 03 §1).
+- **Timers follow the server's flood control.** Ergo accepts a batch at once and then stops reading the connection for half a second per line. The acknowledgement deadline, the deadline of every query and the idle timeout are counted from an estimate of when the server has caught up, and no keepalive is sent meanwhile (S9; 03 §2, §5). The formula of revision 2 would have reported a short message sent after a long one as "possibly sent".
+- **A lost history is detected.** The reference for catch-up has an id as well as a time, so "history does not reach back", including after a server restart, is reported instead of passing silently (03 §6).
+- **Ergo does not label the failure of a multiline batch** (S6). It is attributed to the one message in flight.
+- **Presence when the agent dies.** Claude Code gives a background command a file for stdout and stderr together, so nothing ever fails to write. The listener watches the chain of processes that started it (S14; 03 §2).
+- **Last activity** is the newest chat message among a channel's last 50 history entries, since history also holds joins (03 §8).
+- A third dependency, `golang.org/x/sys/unix` (02 §2).
 
 ## Files
 
@@ -44,10 +56,10 @@ M3 and M4 can run in parallel after M2; M5 and M6 after M4.
 
 ## Where the plan does not meet the issue as written
 
-- **FR4.2**: last activity is expected to be available only for the listener's own channel (D4, S3).
+- **FR4.2**: last activity is available only for the listener's own channel (D4; confirmed by S3).
 - **FR5.2**: auto-detection of the listener is limited to the read-only commands, to satisfy FR5.3 (D15).
-- **FR1.6**: private messages sent during a disconnect are not recovered (S5); channel messages are.
-- **FR1.5**: a listener whose agent died may stay present when its output is not a pipe (S14, R8).
+- **FR1.6**: private messages sent during a disconnect are not recovered (confirmed by S5); channel messages are.
+- **FR1.5**: an agent that dies without stopping its listener is noticed through the stdout pipe or the parent chain; this is verified for Claude Code only (S14, R8).
 
 ## Sign-off
 
@@ -61,9 +73,9 @@ Accepted by the owner on 2026-10-10, answering the issue's open questions:
 | D4 (OQ4) | last activity is the newest history timestamp where the server exposes it, otherwise unknown |
 | D5 (OQ5) | Go |
 
-Still needed:
+Still needed. The code implements each as the plan proposes; 01 §5 says what changes if one goes the other way:
 
-| When | Decisions |
-|---|---|
-| Before M4 | D9 (what "accepted" means), D11 (size cap), D15 (no auto-detection for posting) |
-| Before M8 | D7, D8, D12, D17, and the additions listed in 01 §1 |
+| Decisions |
+|---|
+| D9 (what "accepted" means), D11 (size cap), D15 (no auto-detection for posting) |
+| D7, D8, D12, D17, and the additions listed in 01 §1 |

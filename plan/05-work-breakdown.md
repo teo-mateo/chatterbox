@@ -2,13 +2,29 @@
 
 Each task lists what it implements and how it is known to be done. Test identifiers refer to [06-testing-and-acceptance.md](06-testing-and-acceptance.md).
 
+## Status on 2026-10-10
+
+| Milestone | State | Open |
+|---|---|---|
+| M0 | done, except as listed | T0.4: the workflow is written (`.github/workflows/ci.yml`) and every step passes locally, but it has not run on GitHub: the branch is not pushed. T0.6: S7 was not measured on tiny2, S14 not examined for Pi. T0.7: owner sign-off, see 01 §5 |
+| M1 | done | |
+| M2 | done | T2.12 was built as watching the chain of parent processes (03 §2) |
+| M3 | done | |
+| M4 | done | built on D9, D11 and D15 as proposed; they are not signed off (01 §5) |
+| M5 | done | |
+| M6 | done | |
+| M7 | done | AT-ONBOARD (a fresh agent given only the skill) has not been observed |
+| M8 | partly | T8.1 done: AT-1 to AT-7 pass in both configurations. T8.4 done: stdout is written in one place, fed by one function. T8.2 open: the built binary was exercised on tiny2 on a temporary channel (two listeners, every command), but the checklist with two real agents and a human on `#hof` has not been run. T8.3 (12-hour soak) and T8.5 (update issue #1) open |
+
+All unit tests pass with the race detector; the integration and acceptance suite passes against Ergo 2.19.1; `go vet` and `staticcheck` are clean; the four release binaries build.
+
 ## M0. Sign-off, bootstrap, spikes
 
 | Task | Description | Done when |
 |---|---|---|
 | T0.1 | Owner sign-off on the answers to the open questions, D1–D5 | **done 2026-10-10** (01 §5) |
 | T0.2 | Go module, directory layout of 02 §2, `Makefile` targets `build`, `test`, `test-integration`, `lint` | `make build` produces `bin/chatterbox`; `chatterbox version` prints a version |
-| T0.3 | Local Ergo harness in `test/ergo/`: fetch a pinned Ergo 2.19.x release, generate a self-signed certificate, start on a free port with the test config of 06 §2, stop | `make ergo-up`, then a raw TLS `CAP LS` shows the capabilities listed in 01 §2 |
+| T0.3 | Local Ergo harness in `test/ergo/`: fetch a pinned Ergo 2.19.x release (2.19.1, checksum verified), generate a self-signed certificate, start on a free port with the test config of 06 §2, stop. `make ergo-up` starts one with Ergo's shipped timings on port 16697 for manual work | `make ergo-up`, then a raw TLS `CAP LS` shows the capabilities listed in 01 §2 |
 | T0.4 | CI: build, `go vet`, `staticcheck`, unit tests with `-race`, and the integration suite against the harness | workflow green on the branch |
 | T0.5 | Spike S3 (history of channels the client is not in) first | result recorded in 08; 03 §8 and IT-CHANNELS state the case that applies |
 | T0.6 | Spikes S1, S2, S4–S14 against the harness, and against tiny2 where the question is about that deployment. Record each result in 08 | every spike has a recorded answer; affected sections of 03 updated |
@@ -39,7 +55,7 @@ Each task lists what it implements and how it is known to be done. Test identifi
 | T2.9 | Shutdown: SIGINT/SIGTERM/SIGHUP send `QUIT` and exit 0; SIGPIPE ignored; exit on stdout write error and on stdout hang-up | IT-EXIT |
 | T2.10 | Lock file, held for the process lifetime and never removed; second listener for the same nickname refused | IT-LOCK |
 | T2.11 | stderr diagnostics for state changes, sparse by default, `--verbose` for the rest; nothing but message lines on stdout | IT-STDOUT |
-| T2.12 | Parent-process watching, if S14 shows it is reliable for the target harnesses | IT-EXIT (parent case), or recorded as not done with the reason |
+| T2.12 | Watching the chain of parent processes (03 §2); S14 showed that Claude Code gives a background command a file, not a pipe | IT-EXIT (parent case) |
 
 ## M3. Inbound delivery
 

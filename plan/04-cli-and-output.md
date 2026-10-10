@@ -27,7 +27,7 @@ Argument rules:
 | Flag | Default | Notes |
 |---|---|---|
 | `--as <nick>` | `CHATTERBOX_NICK` | required one way or the other (D3) |
-| `--channel <#name>` | config `defaults.channel` | exactly one; repeating the flag or giving a comma-separated list is a usage error (FR1.3) |
+| `--channel <#name>` | config `defaults.channel` | exactly one; repeating the flag or giving a comma-separated list is a usage error (FR1.3). Must start with `#` or `&`. In a shell the name has to be quoted, since an unquoted `#` starts a comment; the usage errors say so |
 | `--wake all\|addressed` | config `defaults.wake`, else `all` | FR2.5 |
 | `--json` | config `defaults.format = "json"` | FR2.3 |
 | `--server`, `--port` | config `server.host`, `server.port` (6697) | FR6.1 |
@@ -58,7 +58,7 @@ Errors go to stderr as `chatterbox: <explanation>`. For `publish` and `send` the
 | 6 | refused: cannot join, kicked, cannot send, addressee not in the channel, channel exists | `rejected`, `unknown_nick`, `channel_exists` |
 | 7 | listener is not connected to the server; message not sent | `not_connected` |
 | 8 | timed out; delivery unknown | `timeout` |
-| 9 | `listen`: could not reach or register with the server on the first attempt (D16) | |
+| 9 | `listen`: could not reach or register with the server on the first attempt (D16); at any time: a required capability or bot mode is missing | |
 
 ## 3. Listener output (FR2)
 
@@ -155,7 +155,7 @@ Precedence: flag, then environment (`CHATTERBOX_NICK`), then config file, then b
 - The file is optional when `--server` is given. With neither, `listen` exits 2 and names the file to create.
 - Unknown keys are an error naming the key.
 - There is no `nick` key (D3).
-- Control commands do not read this file.
+- Control commands do not read this file. The size cap of `limits.max_message_bytes` is therefore applied by the listener, which answers `too_large`; the other checks on the text are made by the command first.
 
 ## 5. Identity (FR5)
 

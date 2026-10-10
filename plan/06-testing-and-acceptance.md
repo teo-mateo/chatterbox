@@ -12,17 +12,30 @@
 
 Integration and acceptance tests run the compiled binary as subprocesses and read its stdout and stderr: they test what an agent sees. Both run in CI (T0.4).
 
+Where the tests are:
+
+| Tests | Location |
+|---|---|
+| `UT-CFG`, `UT-ID`, `UT-PIN`, `UT-CLI`, `UT-IRC`, `UT-WQ`, `UT-BATCH`, `UT-INB`, `UT-FMT`, `UT-CTL`, `UT-OUT` | next to the code, `internal/<package>/*_test.go` |
+| `UT-BACKOFF`, `UT-DEDUP` | `internal/listener/units_test.go` |
+| `UT-FSM`, `UT-LABEL`, `UT-MEM` | `internal/listener/listener_test.go`, against a scripted fake server (`fake_test.go`) that can show what Ergo cannot be made to: missing tokens, unlabeled failures, silence, short history pages |
+| `IT-*` | `test/e2e/`: `listen_test.go`, `delivery_test.go`, `send_test.go`, `presence_test.go`, `resilience_test.go` |
+| `AT-1` to `AT-7` | `test/e2e/acceptance_test.go` |
+
+`make test` runs the unit tests with the race detector; `make test-integration` the rest (about two minutes, most of it waiting for the server's flood control).
+
 ## 2. Test helpers
 
 - **Ergo launcher**: a private Ergo per test package, on a free port, with a fresh self-signed certificate and a temporary data directory. Test configuration, differing from Ergo's defaults only where stated:
   - flood control (fakelag) **left on**, as in the default, so timing behavior is the real one;
   - `chathistory-maxmessages` lowered to 20, so catch-up pagination is exercised with tens of messages;
-  - idle timeouts lowered to a few seconds;
+  - idle timeouts lowered to a few seconds (ping after 4 s, disconnect after 8 s);
   - an operator account for the test code (to kick, set channel modes, force a nickname change);
   - variants: multiline disabled (IT-CAPS), history disabled.
 - **Plain client**: a minimal IRC client in the test code that negotiates no capabilities at all. It stands in for "a human using any standard IRC client" (FR7.3).
 - **Cutting proxy**: a TCP proxy between a listener and Ergo that counts accepted connections and can drop, black-hole and restore the connection.
-- **Listener handle**: starts `chatterbox listen` with isolated `XDG_CONFIG_HOME` and `CHATTERBOX_RUNTIME_DIR` and a `[tuning]` section with short timings; exposes stdout lines, stderr, and waits for `joined`.
+- **Listener handle**: starts `chatterbox listen` with isolated `XDG_CONFIG_HOME` and `CHATTERBOX_RUNTIME_DIR` and a `[tuning]` section with short timings; exposes stdout lines, stderr, and waits for `joined`. The tuned keepalive is 2 s, not shorter: with flood control on, a `PING` every 400 ms is more than the server reads, and the connection never leaves the throttled state.
+- Runtime directories of the tests are made directly under the temporary directory: the usual per-test directories are too long for a socket path.
 
 ## 3. Unit tests
 
@@ -72,7 +85,7 @@ Integration and acceptance tests run the compiled binary as subprocesses and rea
 | IT-PUBLISH | `publish` is seen by another listener and by the plain client; stdin form with a trailing newline arrives as one line; exit 0 | FR3.1, FR7.1 |
 | IT-SEND | `send B` appears in the channel as `B: ...`, flagged `to-you` at B only; unknown nickname exits 6; `--private` reaches only B | FR3.2 |
 | IT-IMPORTANT | `send --important` and `publish --important` show `[IMPORTANT]` to the plain client and the `important` flag to listeners | FR3.3 |
-| IT-MULTILINE | with flood control on: a 3 000-byte, 30-line message is one message at a listener and separate lines, in order, at the plain client; a 100-line message is acknowledged; a 10 000-byte message arrives as `(1/n)`…`(n/n)` in order and the command exits 0 with progress keeping the client alive; killing the client mid-way stops the remaining parts | FR3.4, FR3.5, FR7.3 |
+| IT-MULTILINE | with flood control on: a 3 000-byte, 30-line message is one message at a listener and separate lines, in order, at the plain client; a 1 500-byte single line arrives as one line; a 100-line message is acknowledged; a 10 000-byte message arrives as `(1/n)`…`(n/n)` in order and the command exits 0 with progress keeping the client alive; a message over the size cap is refused; killing the client mid-way stops the remaining parts | FR3.4, FR3.5, FR7.3 |
 | IT-WHO | two listeners and the plain client: `whos-there` lists three with the right kinds | FR4.1 |
 | IT-CHANNELS | two occupied channels with messages, the listener in one: both names listed; own channel has a last-activity time; the other channel shows exactly what S3 established (a time, or unknown). Called three times in a row, each returns within the time budget | FR4.2 |
 | IT-CREATE | free name: announcement seen in the old channel, the listener is operator in the new one, and after a forced reconnect it is back in the new one. Listed existing name: exit 6, still in the old channel. Secret existing channel (not listed): the listener returns to the old channel, prints what was posted there meanwhile, exit 6 | FR4.3, FR1.3 |
@@ -98,7 +111,7 @@ The scenario runs as one continuous session, twice: configuration **X** with age
 | AT-3 | A: `publish "hello"` | B's stdout has exactly one new line, from agentA, kind `bot`; the plain client received the text; A's stdout has nothing |
 | AT-4 | B: `send --important agentA "stop"` | A prints one line flagged `to-you,important` (X and Y); the plain client sees `agentA: [IMPORTANT] stop`. In Y additionally: the plain client posts unaddressed `[IMPORTANT] everyone stop` and A prints it, which is the case that only the importance bypass can explain |
 | AT-5 | The plain client posts `status?` | X: A and B each print one line with kind `human`. Y: B prints it and A does not; the plain client then posts `agentA: status?` and A prints it with kind `human` |
-| AT-6 | A's connection is cut through the proxy; B publishes 3 messages and the plain client posts 2 (in Y, addressed to A); the connection is restored | A prints those 5 once each, in order, flagged `replayed`; one further message is printed once |
+| AT-6 | A's connection is cut through the proxy; B publishes 3 messages and the plain client posts 2 (in Y all five carry `agentA:` in the text; B uses `publish`, because `send` to a participant who is not in the channel is refused); the connection is restored | A prints those 5 once each, in order, flagged `replayed`; one further message is printed once |
 | AT-7 | SIGTERM to A's listener | `whos-there` as B no longer lists agentA; `publish --as agentA` exits 3 |
 | AT-ONBOARD | A fresh agent session given only `skills/chatterbox/SKILL.md` starts a listener, answers an addressed question, stays silent on an unaddressed remark and on a "thanks" | observed manually |
 

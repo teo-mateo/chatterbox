@@ -34,3 +34,19 @@ Done by a separate agent that read the issue and every plan file, with instructi
 
 - Binding auto-detection to a shared ancestor process (part of finding 2). Agents started from one terminal multiplexer share ancestors, so the check would not separate them reliably. D15 removes the need.
 - Making D2 validate-only by default (part of finding 10). It is offered as alternative B instead, because a command named `create-channel` that creates nothing answers OQ2 less directly. Owner's call.
+
+## Revision 3, 2026-10-10: findings of the spikes and the implementation
+
+Not a review: these are the places where revision 2 was wrong or silent, found by running it. Each is described where it now lives.
+
+| # | Finding | Where |
+|---|---|---|
+| 1 | Without `draft/event-playback`, Ergo's history contains joins and quits as chat lines from `HistServ`; revision 2 deliberately did not request the capability | 03 §1, S4 |
+| 2 | The acknowledgement formula (10 s plus 0.5 s per line of the unit) measured the wrong unit: the server's stall follows a batch, so it hits the next thing sent. Queries had a fixed deadline that the same stall would exceed | 03 §5, S9 |
+| 3 | The idle timeout and the keepalive did not allow for that stall; a keepalive faster than the server's command rate keeps the connection throttled for good | 03 §2 |
+| 4 | "Server restarted, history gone" was listed as undetectable. With the listener's own join in history it is detectable | 03 §6, R6 |
+| 5 | Ergo's `FAIL BATCH` carries no label | 03 §5, S6 |
+| 6 | `CHATHISTORY LATEST * 1` returns the newest entry, which is often a join | 03 §8 |
+| 7 | Claude Code runs background commands with a file for stdout and stderr; T2.12 was conditional on this | 03 §2, S14 |
+| 8 | `send` to an agent that is momentarily disconnected is refused ("not in the channel"). That is what 03 §5 specifies, and it is why AT-6 in configuration Y has agentB use `publish`; worth knowing when reading D1 | 06 §5 |
+| 9 | An unquoted `#channel` is a shell comment. The CLI's usage errors and the agent instructions say so | 04 §1 |
