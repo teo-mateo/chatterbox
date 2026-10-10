@@ -41,11 +41,11 @@ Every requirement of issue #1: where it is designed, which tasks build it, which
 
 | Question | Decision | Settled by |
 |---|---|---|
-| OQ1 visibility of `send` | D1 | sign-off T0.7; S5 |
-| OQ2 meaning of `create-channel` | D2, or alternative B | sign-off T0.7; S8 |
-| OQ3 default nickname | D3 | sign-off T0.1 |
-| OQ4 last activity | D4 | S3 and sign-off T0.5 |
-| OQ5 language | D5 | sign-off T0.1 |
+| OQ1 visibility of `send` | D1 | accepted 2026-10-10 |
+| OQ2 meaning of `create-channel` | D2 | accepted 2026-10-10; S8 confirms it works on the server |
+| OQ3 default nickname | D3 | accepted 2026-10-10 |
+| OQ4 last activity | D4 | accepted 2026-10-10; S3 establishes which case applies |
+| OQ5 language | D5 | accepted 2026-10-10 |
 
 ## Acceptance scenario
 

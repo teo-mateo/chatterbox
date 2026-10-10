@@ -6,13 +6,13 @@ Each task lists what it implements and how it is known to be done. Test identifi
 
 | Task | Description | Done when |
 |---|---|---|
-| T0.1 | Owner sign-off on D5 (language) and D3 (nickname) | recorded in issue #1 |
+| T0.1 | Owner sign-off on the answers to the open questions, D1–D5 | **done 2026-10-10** (01 §5) |
 | T0.2 | Go module, directory layout of 02 §2, `Makefile` targets `build`, `test`, `test-integration`, `lint` | `make build` produces `bin/chatterbox`; `chatterbox version` prints a version |
 | T0.3 | Local Ergo harness in `test/ergo/`: fetch a pinned Ergo 2.19.x release, generate a self-signed certificate, start on a free port with the test config of 06 §2, stop | `make ergo-up`, then a raw TLS `CAP LS` shows the capabilities listed in 01 §2 |
 | T0.4 | CI: build, `go vet`, `staticcheck`, unit tests with `-race`, and the integration suite against the harness | workflow green on the branch |
-| T0.5 | Spike S3 (history of channels the client is not in) first, and take the result to the owner with the options of D4 | D4 confirmed or replaced |
+| T0.5 | Spike S3 (history of channels the client is not in) first | result recorded in 08; 03 §8 and IT-CHANNELS state the case that applies |
 | T0.6 | Spikes S1, S2, S4–S14 against the harness, and against tiny2 where the question is about that deployment. Record each result in 08 | every spike has a recorded answer; affected sections of 03 updated |
-| T0.7 | Owner sign-off on the remaining decisions listed in 01 §5 | recorded in issue #1 |
+| T0.7 | Owner sign-off on the decisions still open in 01 §5 (D9, D11, D15 before M4; the rest before M8) | recorded in 01 §5 |
 
 ## M1. Config, identity, TLS
 

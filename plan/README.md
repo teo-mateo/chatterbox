@@ -2,7 +2,7 @@
 
 Plan for [issue #1](https://github.com/teo-mateo/chatterbox/issues/1): `chatterbox`, a command-line IRC client that lets AI coding agents talk to each other and to a human over a standard IRCv3 server.
 
-Status: **revision 2**, revised after one adversarial review ([09-review-log.md](09-review-log.md)). Awaiting owner sign-off on the decisions below. No spike has been run yet.
+Status: **revision 2**, revised after one adversarial review ([09-review-log.md](09-review-log.md)). The answers to the issue's five open questions (D1–D5) were accepted by the owner on 2026-10-10; the remaining decisions below still await sign-off. No spike has been run yet.
 
 ## Files
 
@@ -49,12 +49,21 @@ M3 and M4 can run in parallel after M2; M5 and M6 after M4.
 - **FR1.6**: private messages sent during a disconnect are not recovered (S5); channel messages are.
 - **FR1.5**: a listener whose agent died may stay present when its output is not a pipe (S14, R8).
 
-## Sign-off needed
+## Sign-off
+
+Accepted by the owner on 2026-10-10, answering the issue's open questions:
+
+| Decision | Answer |
+|---|---|
+| D1 (OQ1) | `send` is a channel message addressed to the nick; `--private` is the option |
+| D2 (OQ2) | `create-channel` moves the listener into the new channel (alternative B not taken) |
+| D3 (OQ3) | the nickname is always explicit |
+| D4 (OQ4) | last activity is the newest history timestamp where the server exposes it, otherwise unknown |
+| D5 (OQ5) | Go |
+
+Still needed:
 
 | When | Decisions |
 |---|---|
-| Before any code | D5 (Go) |
-| Before M1 | D3 (nickname always explicit) |
-| Before M4 | D1 (`send` is an addressed channel message), D9 (what "accepted" means), D11 (size cap), D15 (no auto-detection for posting) |
-| Before M5 | D2 (`create-channel` moves the listener) or its alternative B, D4 with the result of S3 |
+| Before M4 | D9 (what "accepted" means), D11 (size cap), D15 (no auto-detection for posting) |
 | Before M8 | D7, D8, D12, D17, and the additions listed in 01 §1 |

@@ -48,6 +48,8 @@ Not yet verified: everything in the spike list of [08-risks-and-spikes.md](08-ri
 
 ## 3. Decisions on the issue's open questions
 
+D1–D5 were accepted by the issue owner on 2026-10-10.
+
 ### D1 (OQ1). `send` is a channel message addressed to the nick; private delivery is an option
 
 - `chatterbox send <nick> <message>` posts `<nick>: <message>` to the listener's channel.
@@ -55,7 +57,7 @@ Not yet verified: everything in the spike list of [08-risks-and-spikes.md](08-ri
 
 Why: the primary use case has a human watching and steering (FR7.1). Agent-to-agent traffic the human cannot see defeats that. An addressed channel message is also recoverable from channel history after a disconnect (FR1.6); private messages probably are not without accounts (S5).
 
-Consequences the owner should weigh:
+Consequences:
 
 - With wake filter `all`, every agent in the channel is woken by a `send` to another agent.
 - FR3.3's "printed regardless of the wake filter" adds nothing for an addressed `send`: an addressed message is printed under either filter anyway. The `important` flag still reaches the recipient and the human; the filter bypass only matters for unaddressed important messages (D7).
@@ -81,7 +83,7 @@ Consequences:
 - The channel disappears when its last participant leaves. The command's output says so.
 - Other agents do not follow automatically. Each has to restart its listener with the new `--channel`.
 
-Alternative for the owner (B): `create-channel` only validates the name and checks that it is free, changes nothing, and tells the agent to run `listen --channel <#name>`. Simpler and without the moving parts, but the command then creates nothing.
+Alternative B, not taken: `create-channel` only validates the name and checks that it is free, changes nothing, and tells the agent to run `listen --channel <#name>`. It remains the fallback if S8 shows that joining does not create a channel on the target server.
 
 ### D3 (OQ3). The nickname is always explicit; nothing is derived
 
@@ -96,11 +98,7 @@ Why: FR1.4 forbids choosing another name on collision, so a derived name gains l
 - For the listener's own channel this works whenever history is enabled.
 - For other channels it depends on server policy. Ergo is expected to refuse history to non-members (S3). Then last activity is shown as `-` in text and `null` in JSON.
 
-**This means FR4.2 is expected to be only partly met**: names for all channels, last activity for the listener's own channel only. chatterbox will not join other channels to read their history: that breaks FR1.3 and makes join/part noise for everyone. S3 runs first in M0, and its result goes to the owner as a choice:
-
-- (a) accept "last activity where the server exposes it" (the plan's default);
-- (b) drop last activity from `channels`;
-- (c) get it from the server side (for example a client with operator privileges), which brings server management into scope.
+**This means FR4.2 is expected to be only partly met**: names for all channels, last activity for the listener's own channel only. chatterbox will not join other channels to read their history: that breaks FR1.3 and makes join/part noise for everyone. The owner accepted this on 2026-10-10. S3 still runs first in M0, to establish which of the two cases applies and to fix what IT-CHANNELS asserts. If the server turns out to allow the lookup, FR4.2 is met in full.
 
 ### D5 (OQ5). Go
 
@@ -198,14 +196,11 @@ If the first connection attempt fails (name resolution, refused, TLS, registrati
 
 After a reconnect the listener delivers everything the server returns for the gap, as FR1.6 says. The server's own retention bounds it. If the listener can tell that history does not reach back to where it left off, it says so on stderr; whether the agent should also see a line on stdout for that is a question for the owner (it would be the one exception to FR2.6).
 
-## 5. Sign-off needed from the issue owner
+## 5. Sign-off
 
-Before any code: **D5**.
+Accepted by the issue owner on 2026-10-10: **D1**, **D2**, **D3**, **D4**, **D5**.
 
-Before M1: **D3**.
+Still needed:
 
-Before M4: **D1**, **D9**, **D11**, **D15**.
-
-Before M5: **D2** (or alternative B), **D4** with the result of S3.
-
-Any time before M8: D7, D8, D12, D17's stdout question, and the additions in §1.
+- Before M4: **D9**, **D11**, **D15**.
+- Any time before M8: D7, D8, D12, D17's stdout question, and the additions in §1.
