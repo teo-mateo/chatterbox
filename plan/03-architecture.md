@@ -74,8 +74,13 @@ with four timers: ping (50 s), liveness (120 s), reconnect backoff, send-ack tim
 `rustls` is driven through its `Stream` impl on a non-blocking socket: a read returns
 `WouldBlock`/`WantRead` → poll again; a write returning `WouldBlock` leaves the connection in
 "wants write" state and the writable poll resumes it — **no** blocking `write_all` on a TLS stream,
-which is a known hang. Outbound bytes go through one 256 KiB buffer; if it exceeds 220 KiB the
-listener stops accepting new sends (queue-full error, exit 4) rather than growing.
+which is a known hang. Outbound bytes go through one 256 KiB buffer; past 220 KiB the listener
+refuses new sends with `send_buffer_full` (exit 17, retry after `status.retry_in_s`) rather than
+growing. Two distinct back-pressures, two distinct codes: exit 4 means "the request queue is full"
+(a caller-side pacing problem) and exit 17 means "the socket cannot take bytes yet" (retry later).
+`TCP_NODELAY` is on; the resolver returns all A/AAAA records and connects with a 250 ms head start
+for the first address, then races the rest (Happy Eyeballs, IPv6 first), because the LAN target has
+both an AAAA and an A record and a stalled v6 route must not wedge a listener.
 
 Rationale for the simpler alternative that was rejected: one OS thread per concern with blocking
 1 s read timeouts is fewer concepts, but with `rustls` a partial TLS record plus a blocking read
@@ -83,18 +88,36 @@ cannot be resumed cleanly, so the poll loop is the smaller overall risk. Recorde
 
 ## 3.4 Control socket and IPC protocol
 
-Path (FR5.3, FR6.3):
+Path (FR5.3, FR6.3), all under the runtime dir, which is resolved in this order and **validated**
+before use:
 
 ```
-$XDG_RUNTIME_DIR/chatterbox/                    0700  (fallback: /tmp/chatterbox-$UID, 0700)
-                       /<percent-encoded nick>.sock   0600
-                       /instances/<nick>.json         0600
-                       /pins.toml (state dir)         0600
+$CHATTERBOX_RUNTIME_DIR                              (explicit, trusted operator override)
+$XDG_RUNTIME_DIR/chatterbox                          (normal case: /run/user/$UID/chatterbox)
+$XDG_STATE_HOME/chatterbox/run                       (default: ~/.local/share/chatterbox/run)
+$HOME/.local/share/chatterbox/run
+/tmp/chatterbox-$UID                                 (last resort; containers with no writable HOME)
+
+  <runtime>/                       0700
+  <runtime>/<nick>.sock            0600   nick is ASCII-case-folded for the filename
+  <runtime>/instances/<nick>.json  0600   holds the gap-fill cursor (03#3.6) — not messages
+  <state>/pins.toml                0600   lives in the state dir, not the runtime dir
 ```
 
-Socket dir mode is set with `umask(0177)` before creation, and `fchmod` immediately after `bind`
-(the two-step is required because `bind` uses the umask for the inode). On accept:
-`getsockopt(SO_PEERCRED)` → `uid` must equal the listener's euid, else reply `peer_uid` and close.
+The fallbacks matter more than they look: `XDG_RUNTIME_DIR` is unset in most containers, CI jobs and
+agent harnesses, so the `/tmp` form is the common path, not the exotic one. Validation before
+`bind`: `mkdir -p -m 0700`, then `stat` and require `st_uid == euid`, `mode & 0777 == 0700`, and
+`!S_ISLNK`; anything else is `usage` (exit 2) naming the path and the reason — never a silent
+fallback, because a foreign-owned directory means someone else can point our clients at their socket.
+Socket mode is set with `umask(0177)` before creation plus `fchmod` after `bind` (`bind` uses the
+umask for the inode). On accept: `getsockopt(SO_PEERCRED)` → uid must equal the listener's euid,
+else reply `peer_uid` and close.
+
+**Lifecycle, which is a correctness issue and not housekeeping:** the socket and instance file are
+created **after** registration reaches READY, and removed at shutdown only if the on-disk inode and
+the recorded pid both match ours. A `listen --as pi` that fails on `433` (exit 10) must therefore
+never touch the live listener's socket — otherwise a second attempt makes a healthy listener
+undiscoverable (`3 no_listener`) while its IRC connection is still up (R18, IT-233).
 
 Transport: one JSON request per connection, one JSON reply, then close. 1 MiB request ceiling.
 No streaming (nothing here needs it; the wake channel is stdout).
@@ -110,7 +133,13 @@ No streaming (nothing here needs it; the wake channel is stdout).
   "numeric":"401","retryable":false}}
 ```
 
-`cmd` ∈ `publish send whos-there channels create-channel status ping`. Error codes
+`cmd` ∈ `publish send whos-there channels create-channel status ping cancel`.
+**Cancellation (R15):** a send request carries a client id and the CLI's connection is held open
+until the reply. If that connection closes before the reply — the CLI's `--timeout` expired, the
+agent was interrupted — the listener drops the request if it is still queued, and if the bytes are
+already on the wire it replies `delivery=uncertain` to whoever asked next and marks the label in
+`status`. The exit-6 hint must never encourage a blind retry of a message that may have posted:
+`04#4.6` prints the retry advice only when the listener confirmed the request never left. Error codes
 (`src/err.rs`, exit codes in `04#4.6`): `no_listener stale_socket nick_mismatch peer_uid
 queue_full server_reject ack_timeout conn_lost bad_request unsupported cap_missing pin_mismatch`.
 
@@ -154,39 +183,72 @@ READY ──QUIT/SIGTERM──▶ SHUTTING_DOWN (flush QUIT, unlink socket+insta
 Gap-fill state, in memory only (issue #1: no local store):
 
 - `seen: LRUSet<msgid>` capacity 4096 — exact duplicate suppression
-- `cursor: {msgid?, time}` — updated **after** a message has been handed to the pipeline, including
-  suppressed ones, so gap fill never re-requests the same window
-- `backfill_pending: Vec<Message>` — messages replayed during catch-up are buffered and emitted in
-  `time` order after the batch closes, so FR1.6's "in order" holds even though the replay arrives
-  after live traffic has resumed
+- `cursor: {msgid, time, at, channel, server}` — **persisted** in `instances/<nick>.json` (0600) and
+  advanced **only after a wake record has been written to stdout**, never when a record is dropped by
+  the stall policy (I3) or suppressed as self/service. A cursor that moves past a message the agent
+  never saw turns a temporary stall into permanent loss, and that is exactly what revision 1 of this
+  section did. A cursor is a pointer into the server's copy, not a message store, so persisting it
+  stays inside issue #1's "no local message store" (R11)
+- `hold: Vec<Message>` — a **single** queue for the whole catch-up window: replayed messages *and*
+  live messages arriving during it are buffered here, ordered by the server `time` of each message's
+  **first** part, ties broken by arrival position, and flushed together when the envelope closes. The
+  earlier design emitted live traffic immediately while buffering replay, which prints a newer
+  message before an older one — precisely the ordering FR1.6 forbids, and the case that happens on
+  every busy channel reconnect. If `hold` exceeds `limits.catchup_buffer` (default 512) the oldest
+  are flushed with a stderr WARN naming the count: order is then best-effort for that window, and
+  `wakes_dropped`/`gapfill` say so rather than pretending
 
-Algorithm on entry to READY after a reconnect:
+Algorithm on entry to READY — **including the first READY of a process**, which is new in revision 2
+because restarting the listener is the prescribed recovery for dropped wakes (`08`), so "first join ⇒
+skip gap fill" made that recovery guarantee loss:
 
 ```
-if first_join: cursor = none; skip gap fill            # FR1.6 covers reconnects only
+cursor = load_cursor(instances/<nick>.json)   # null if absent, or if server/channel changed
+if cursor is null:
+    skip gap fill                             # genuinely nothing to fetch; stderr says so
 else:
   loop:
-    q = CHATHISTORY LATEST <chan> msgid=<cursor.msgid> 1000   # or timestamp= if no msgid
-    collect lines until matching BATCH -<id> or +draft/chathistory-end
-    for m in collected sorted by time:                   # nested multiline coalesced first
-        if m.msgid in seen: continue                     # dedup, FR1.6
-        if m.sender == self or is_service(m): advance(cursor); continue   # FR2.4
-        seen.insert(m.msgid); advance(cursor); emit(m)
-    if collected.is_empty() or end_marker: break         # caught up
-    if iterations == 8: warn("history truncated by server retention (2048)"); break
+    q = CHATHISTORY LATEST <chan> msgid=<cursor.msgid> 1000   # timestamp= fallback below
+    collect lines until matching BATCH -<id> or the +draft/chathistory-end tag
+    coalesce nested draft/multiline parts into messages
+    for m in collected_sorted_by_first_part_time_stable:
+        if m.msgid in seen: continue                        # dedup, FR1.6
+        if m.sender == self or is_service(m):                # FR2.4: silent, but the cursor moves
+            seen.insert(m.msgid); advance_cursor(m); continue
+        seen.insert(m.msgid); hold.push(m)                   # live traffic joins the same queue
+    if collected.is_empty() or end_marker: flush(hold); break
+    if iterations >= iterations_max:
+        warn("gap exceeds server retention (2048): some messages are unrecoverable")
+        flush(hold); break
   stderr: "catchup complete: N messages delivered, D duplicates suppressed"
+
+advance_cursor(m): only after that message's wake line is written to stdout;
+                   then persist (write-temp + rename, 0600) into the instance file
 ```
 
-Correctness notes: msgid is the only exact dedup key (measured on every replayed line); `time`
-alone collides at millisecond resolution; live messages arriving *during* replay are inserted into
-`seen` before the replay reaches them, which is what makes the dedup necessary in both directions.
-The 8-iteration cap is `2048/1000 ≈ 2` pages of retention with headroom, and its only purpose is to
-bound the loop.
+Correctness notes. msgid is the only exact dedup key (measured on every replayed line) and is
+**never** an ordering key — the observed msgids (`_p8txu58…`, `3gutycsm…`, `bnkwjgmp…`) are opaque
+and not monotonic, so `time` orders and msgid dedups (`02#2.14`, UT-113). Live messages arriving
+during replay enter `seen` before the replay reaches them, so dedup must work in both directions.
+`iterations_max = ceil(retention / page) + 1` (3 at 2048/1000), not a magic 8; reaching it is a WARN
+because it means data is unrecoverable, not merely late.
+
+Timestamp-cursor fallback, pre-written rather than improvised if T-0.3(a) fails: query
+`timestamp=<cursor.time − 1000 ms>` and let the msgid LRU swallow the overlap. The 1000 ms window is
+required, not advisory: `02#2.14` measured two messages inside the same millisecond, so a cursor at
+exactly `time` loses boundary messages. LRU 4096 > 2048 server retention, so the overlap always fits
+the dedup window.
 
 Backoff resets to 1 s after 120 s of healthy connection. Reconnect is attempted forever: FR1.5 says
 the listener stays connected until terminated, so "give up after N tries" would violate it. The one
 exception is a fatal exit (pin mismatch, required cap missing, nick taken), which are configuration
-errors that retrying cannot fix.
+errors that retrying cannot fix. **The same backoff applies before the first READY** (revision 2):
+DNS failure, TCP refusal and a TLS handshake failure that is not a pin mismatch are transient — a
+listener started before the server is up retries with `conn`/`dns`/`tcp`/`tls` sub-labels (exit 16
+only when `listen --no-retry` is set, for CI), so FR1.5's "stays connected until terminated" holds
+from process start rather than from the first success. A mid-session `CAP DEL` for anything in the
+required set marks the connection unhealthy and reconnects, which re-asserts it; revision 1 said CAP
+DEL "needs no handling", which left a listener sending batches its server no longer accepts.
 
 ## 3.7 Configuration (FR6.1)
 
@@ -280,19 +342,29 @@ so explicitly rather than claiming a duplicate is safe).
 - `--verbose` on any command: protocol-level trace to stderr with tag values truncated.
 - No telemetry, no network egress beyond the configured server.
 
-## 3.11 Dependencies (12 non-transitive, for `cargo deny` review)
+## 3.11 Dependencies (11 non-transitive, for `cargo deny` review)
 
-`clap` (derive), `serde`, `serde_json`, `toml`, `rustls`, `rustls-pki-types`, `webpki` (only if the
-verifier needs anchor types — drop if not), `polling`, `libc`, `dirs`, `thiserror`, `percent-encoding`,
-`time` (or `chrono`, whichever has the smaller tree at T-0.4). Dev-only: `rcgen` (fake-server
-certs), `anyhow`, `predicates`, `tempfile`, `assert_cmd`. Nothing that shells out, nothing that
-reads env secrets, no TLS stack swap-in.
+`clap` (derive), `serde`, `serde_json`, `toml`, `rustls`, `rustls-pki-types`, `polling`, `libc`,
+`thiserror`, `time` (or `chrono`, whichever has the smaller tree at T-0.4), plus whatever `rustls`
+platform-verifier pieces the custom verifier turns out to need. Dev-only: `rcgen` (fake-server
+certs), `anyhow`, `predicates`, `tempfile`, `assert_cmd`. Nothing that shells out, nothing that reads
+env secrets, no TLS stack swap-in.
+
+Dropped in revision 2, with reasons, because both were load-bearing on FR6.1:
+- **`dirs`** — its macOS mapping is `~/Library/Application Support`, so FR6.1's promised
+  `~/.config/chatterbox/config.toml` would not be the file read on a platform we ship binaries for.
+  Paths resolve from `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_STATE_HOME`/`XDG_RUNTIME_DIR` with
+  `$HOME` fallbacks, by hand, on every platform, so the documented paths are the real ones (R19).
+  `$HOME` itself comes from `getpwuid_r` when the environment omits it.
+- **`percent-encoding`** — it existed only to make a nick safe as a filename, and nicks are validated
+  against `%a{NICKCHARS}` (no `/`, no whitespace) before that; the filename is the case-folded nick.
 
 ## 3.12 Packaging and install
 
 `cargo build --release --target x86_64-unknown-linux-musl` (static, ~3 MB) → GitHub release tarballs
-for linux x86_64/aarch64 (musl) + macOS aarch64/x86_64; `cargo install --path .` for source
-installs; `chatterbox --version` prints version + rustls version + build target, which `doctor`
+for linux x86_64/aarch64 (musl) + macOS aarch64/x86_64 — **macOS is build-verified only**: CI
+compiles it and does nothing else, and the release notes must say "build verified, not smoke tested"
+(R19). `cargo install --path .` for source installs; `chatterbox --version` prints version + rustls version + build target, which `doctor`
 echoes. Install location for the operator: `~/.cargo/bin/chatterbox`, matching websearch-cli /
 webfetch-cli. No systemd unit ships in v1: the agent harness owns the background process, per issue
 #1's "agents use their built-in ability to watch a background process".

@@ -2,7 +2,9 @@
 
 Issue: [#1 Functional requirements: chatterbox as a CLI IRC client for agents](https://github.com/teo-mateo/chatterbox/issues/1)
 Branch: `plan-qwen` (branched from `main` @ `ea26afc`)
-Status: **plan, revision 1** (written from issue #1 plus measurements against the live Ergo 2.19.1 server on tiny2)
+Status: **plan, revision 2** — revision 1 was written from issue #1 plus measurements against the live
+Ergo 2.19.1 server on tiny2; revision 2 is the result of an adversarial review of revision 1
+(`09-adversarial-review.md`), which found 4 blockers and 12 majors and was right about all of them.
 Target: v1 (M0–M8), MIT licence, single Rust binary.
 
 ---
@@ -37,10 +39,35 @@ contradict what a reasonable implementer would guess, and each one changes the d
 | `05-work-plan.md` | milestones and **itemised tasks** (T-ids) with deps, acceptance checks, estimates | writing code |
 | `06-test-plan.md` | unit/fake-server/live test rig, acceptance-scenario mapping, CI | writing tests, reviewing PRs |
 | `07-risks-and-open-questions.md` | risk register, residual unknowns, reversal criteria | reviewing this plan |
-| `08-agent-onboarding-skill.md` | FR8.1 deliverable: the agent instruction block | implementing M7 |
+| `08-agent-onboarding-skill.md` | FR8.1 deliverable: the agent instruction block, plus the human-facing block | implementing M7 |
+| `09-adversarial-review.md` | the review of revision 1, finding by finding, with dispositions | before you disagree with a decision |
 
 Traceability runs both ways: every task in `05-work-plan.md` carries the FR ids it satisfies, and
-every FR in `01-scope-and-decisions.md` carries the task ids and test ids that satisfy it.
+every FR in `01-scope-and-decisions.md` carries the task ids and test ids that satisfy it. The
+authoritative matrix is `06#6.8`; the matrix in `01` is derived from it.
+
+## Effort, gates, and the five things revision 2 changed
+
+**281 h ≈ 35 dev-days** of focused work across 9 phases, of which 76 h (27 %) is tests and rig. Per
+phase: M0 19 · M1 51 · M2 39 · M3 47 · M4 34 · M5 24 · M6 18 · M7 13 · M8 36. Two hard gates at the end
+of M0: the `rustls` pin verifier, and the gap-fill cursor (whose failure has a pre-written fallback, not
+a "limitation"). A red nightly probe against the live server blocks tagging a release.
+
+Revision 1 claimed 124 h against a task table that summed to 264 h; the review caught it, and the
+numbers are now computed from the table that owns them. The other four things revision 2 fixed, all of
+them blockers or near-blockers:
+
+1. **`create-channel` order.** It now JOINs, verifies, and only then PARTs. PART-first meant a refused
+   JOIN left the listener channel-less and deleted the channel the human was watching. (`01#OQ2`)
+2. **Gap-fill ordering and durability.** One hold queue, so a live message can never print before an
+   older backfilled one; and the cursor advances only on a successful stdout write and is persisted, so a
+   dropped wake comes back instead of being silently consumed. (`03#3.6`)
+3. **`send` fails when the addressee is not in the channel** (exit 18). Exit 0 for a message that reached
+   nobody made FR3.2 unenforceable — and the old `UT-142` asserted the broken behaviour. (`01` FR3.2)
+4. **An agent can no longer self-pin a MITM.** Pin-mismatch errors show `host:port` and withhold the
+   presented fingerprint unless stderr is a TTY; pins come from a human. (`03#3.8`, `08`)
+5. **The test rig moved to M1.** Every IT depended on a fake server that the old plan did not build until
+   M8, which is a test suite with no test runner. (`05#T-1.0`)
 
 ## Decisions at a glance
 

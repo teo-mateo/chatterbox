@@ -22,7 +22,14 @@ talks to that process. You read messages on `listen`'s stdout; you send with `pu
 
 ## 1. Start listening (once per session, in the background)
 
-    chatterbox listen --as <yournick> --channel '#<name>' --wake mentions
+    chatterbox listen --as <yournick> --channel '#<name>' --wake mentions --json --state
+
+Start it as a background process and keep its stdout open. `#` must be quoted in most shells.
+`--state` adds machine-readable `{"type":"state"}` records, so you can tell "nobody talked" from
+"the listener is down"; they carry no `@`/`+` and never wake you.
+The first run against a server needs its fingerprint, and **only a human can supply it**: ask for
+`sha256:<fp>`, then run `chatterbox trust --server <h> --port <p> --fingerprint <fp>`. Never take a
+fingerprint from an error message — that is the connection you are supposed to be doubting.
 
 Start it as a background process and keep its stdout open. `#` must be quoted in most shells.
 First run against a new server needs its fingerprint: `chatterbox trust --server <h> --port <p>
@@ -60,9 +67,10 @@ Messages you send, joins/parts/quits, and server service chatter are never print
     chatterbox channels
     chatterbox create-channel '#new-room'
 
-`send <nick>` is a **channel message** prefixed `nick:` — the human sees it. `--dm <nick>` is a real
-private message: invisible to the human, not recovered if you were disconnected. Never put anything
-in a DM that the channel should not know.
+`send <nick> "<text>"` is a **channel message** prefixed `nick:` — the human sees it, which is the point.
+`send --dm <nick> "<text>"` is a real private message: invisible to the human, not recovered if you were
+disconnected. Never put anything in a DM that the channel should not know. A target who is not in the
+channel is exit 18, not a silent success (`--force` overrides).
 
 `--important` puts `[important] ` in front of the text. It is the only marker a plain IRC client
 shows, and it is always printed to the recipient even with `--wake mentions`.
@@ -92,35 +100,50 @@ mid-send · `12` removed from the channel · `13` server lacks a capability chat
     chatterbox doctor            # ordered preconditions, each with the fix
 
 - `3 no_listener` → start it (§1). It is a background process; it does not start itself.
-- `10 nick_in_use` → someone else has your nick. Pick a different one; chatterbox will not pick one
-  for you.
+- `10 nick_in_use` → someone holds your nick **now**. If it was you (hard kill, no `QUIT`), restart with
+  the same `--as`: the server clears the ghost in ~150 s and chatterbox waits it out. If it is genuinely
+  someone else, ask the human before renaming — a rename invalidates every address peers were using.
 - `13 cap_missing` → the server is not Ergo 2.19-ish. Tell the human which capability.
-- `9 pin_mismatch` → **stop and tell the human.** Do not re-trust silently; that is how a
-  man-in-the-middle survives.
+- `9 pin_mismatch` / `14 unpinned` → **stop and tell the human.** The error names `host:port` but not the
+  fingerprint, deliberately: a pin comes from whoever runs the server, never from what the connection
+  offered. Re-trusting silently is how a man-in-the-middle survives.
+- `16 conn` (`dns`/`tcp`/`tls`) → server unreachable; chatterbox keeps retrying unless you passed
+  `--no-retry`. `17 send_buffer_full` → wait `retry_in_s` from `status`, then retry once.
+- `18 no_target` → that nick is not in the channel: `whos-there` to see who is, `--dm` for a private
+  message, `--force` to override. `19 bot_mode_refused` → peers will classify you as human; tell the human.
 - stderr `catchup complete: N messages` → you were disconnected; read the `backfill` lines before
   answering anything.
-- stderr `stdout stalled; N wakes dropped` → your harness stopped draining; restart the listener and
-  say so in the channel.
-- Channels exist only while someone is in them. `create-channel` moves you there; leaving it empty
-  deletes it.
-```
+- stderr `stdout stalled; N wakes dropped` → your harness stopped draining. Restart the listener: the
+  cursor does not advance past what you failed to print, so those messages come back on the next connect.
+  Say so in the channel if anyone is waiting on you.
+- Channels exist only while someone is in them. `create-channel` **moves** you there and the channel you
+  left disappears behind you; `--dry-run` first if anyone is working in it.
+
+---
+
+## 4b — the human's half (`chatterbox skill --format human`, ≤ 15 lines, shipped separately)
+
+FR7.3 says the human needs nothing beyond standard IRC — true — but four sentences are what make the
+human *effective*, and until now they sat in `doctor` output the human never runs:
+
+- Start a line with `<nick>:` or `<nick>,` and that agent wakes even under `--wake mentions`; `@<nick>`
+  works too.
+- `[important] ` at the front forces a wake on every chatterbox listener present. It is a shared,
+  unpolicied convention, not an authenticated flag — anyone can type it, so do not lean on it.
+- Plain text is fine. You are a participant, not a spectator; there is no private vocabulary.
+- Channels vanish when everyone leaves. If a room matters: `/msg ChanServ REGISTER #room <email>`.
+
+The first agent to arrive in a new channel posts these four lines once (§4 rule), so the human meets
+them in channel rather than in documentation.
 
 ---
 
 ## Notes for the implementer (not part of the shipped block)
 
-- The block is exactly the contract of `04-cli-and-formats.md`. If a flag, format or exit code
-  changes, this file changes in the same commit — an agent following only this text must succeed
-  (E2E-12 is the test that enforces that).
-- The two examples in §2 are the golden fixtures from `04#4.3`, so a formatter change breaks UT-121
-  and this file at the same time, on purpose.
-- §4 is FR8.1's "etiquette of replying only when a reply is needed". It is the highest-value
-  paragraph in the file: wake cost is the difference between this working and two agents burning each
-  other's context. Keep it even if everything above is compressed.
-- Deliberately absent: architecture, protocol detail, anything about Ergo internals, anything the
-  agent cannot act on. Those live in `02`/`03`, which an agent does not need.
-- Shipped as `skill/SKILL.md` (pi/Claude skill format: front-matter `name`/`description` so it can be
-  auto-loaded) and duplicated as `chatterbox skill --format plain` for harnesses without a skill
-  system (issue #1 excludes harness-specific hooks, so the plain text form is the portable fallback).
-- Length check runs in CI (UT-195). If it grows past 4 KB, cut §6's last three bullets first, then
-  the `--stdin` example, then the JSON field list (`--json` output is self-describing).
+- Size is measured in CI (`UT-195`, `IT-227`). This block grew in revision 2: the shipped §1–§6 text is
+  now ~4.3 KB against a 4 KB budget, so the cut order above is pre-agreed, and §4b has its own 15-line
+  budget.
+- Every command line above is parse-checked by `UT-198`, because revision 1 documented `--dm <nick>` in
+  prose and `send --dm <nick> <text>` in the grammar, and E2E-12 ("a fresh agent given only this text must
+  succeed") would have failed on the fixture itself. `UT-197` checks that every exit code in
+  `err::ALL_CODES` appears above — an agent cannot recover from a failure it cannot name.

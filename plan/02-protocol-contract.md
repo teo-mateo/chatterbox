@@ -36,9 +36,15 @@ C: CAP ACK :server-time …            → S: 410 * ACK :Invalid CAP subcommand 
 C: CAP REQ :server-time              → S: @time=… CAP * ACK server-time          (granted)
 ```
 
-Both `CAP ACK :a b` and `CAP ACK a b` produce `410`, pre- or post-registration. `CAP ACK` is only
-meaningful as a reply to a server-initiated `CAP NEW`/`CAP DEL` (cap-notify), which is not needed in
-v1.
+**Observed on this server, in this state:** both `CAP ACK :a b` and `CAP ACK a b` produced `410`,
+pre- and post-registration. Two honesty notes, because this claim is load-bearing and was the most
+disputed line in the plan's review. (i) One probe that produced the same `410` was later traced to
+sending the request before the `LS` pages had drained, so the transcript in
+`docs/protocol-notes.md` is the evidence, not this sentence; T-0.3(d) re-runs it with the pages fully
+drained. (ii) The IRCv3.2 spec does allow a client to `CAP ACK` a server-initiated `CAP NEW`/`CAP DEL`
+(cap-notify), so chatterbox's rule is **"we never use `CAP ACK` as a granting step"**, not "`CAP ACK`
+is illegal" — `UT-310` asserts the former. The design is unaffected either way, because step 5
+asserts the grant with `CAP LIST` rather than trusting any particular grant message.
 
 **Why this is the most dangerous finding in the file:** a client that follows the IRCv3 cheat sheet
 (`LS` → `ACK` → register) receives no error, registers fine, joins fine, and ends up with **zero**
@@ -54,9 +60,20 @@ lost). Every symptom appears in a different requirement than the cause.
 4. `CAP END`.
 5. **Assert** with `CAP LIST`; compare against the required set. If a required cap is missing,
    exit 13 with `server did not grant <cap>; refusing to start` rather than degrading quietly.
-   `doctor` re-checks. Required: `server-time message-tags batch draft/multiline draft/chathistory
-   account-notify away-notify echo-message labeled-response standard-replies`.
-   Nice-to-have (warn, don't fail): `extended-join userhost-in-names multi-prefix`.
+   `doctor` re-checks. **Required:** `server-time message-tags batch draft/multiline
+   draft/chathistory echo-message labeled-response standard-replies`. **Wanted, warn-only:**
+   `extended-join userhost-in-names multi-prefix account-notify away-notify`.
+
+   Two changes from revision 1, both from the review. `account-notify`/`away-notify` moved out of the
+   required set: accounts and SASL are an explicit non-goal (`01#1.4`), `sender_account` is always
+   `null` without them, and requiring them meant a spec-compliant server without those two
+   extensions got exit 13 for features v1 does not use. `draft/multiline` stays required, because
+   FR3.4 names it — but that makes the plain-split path in `04#4.7` rule 6 unreachable by
+   *absence*, so rule 6 is re-scoped to the two cases that can actually occur: a granted-then-removed
+   capability (a mid-session `CAP DEL`, which now forces a reconnect per `03#3.3`, and degrades to
+   plain splits with a loud WARN if the server keeps doing it) and a message that exceeds the batch
+   limits. `extended-join` is wanted because its realname is display-only; `userhost-in-names` and
+   `multi-prefix` are display niceties; losing any of them costs no FR.
 6. `MODE <self> +B` (FR1.2), then `JOIN`.
 7. Also request `draft/extended-isupport` when advertised, and re-read `RPL_ISUPPORT` after
    registration; a second `RPL_ISUPPORT` can add tokens mid-session.
@@ -90,6 +107,17 @@ TOPICLEN=390 UTF8ONLY WHOX draft/CHATHISTORY=1000
 | `MAXTARGETS`/`TARGMAX` | 4 PRIVMSG | chatterbox sends one target per message; never multi-targets |
 | `WHOX` | present | available, but see `02#2.10`: WHOX cannot expose usermodes, so it does not help FR4.1 |
 | `UTF8ONLY` | present | messages are UTF-8; chatterbox must not truncate mid-codepoint (`02#2.5`) |
+| `FORWARD` | `f` (mode exists) | a forwarded channel can redirect a JOIN somewhere else; the JOIN handler compares the joined channel against the requested one and treats a mismatch as fatal (`02#2.3a`) |
+
+### 2.3a JOIN failure — one catch-all, because the list is not enumerable from here
+
+`JOIN` can be refused for reasons this plan has not individually reproduced on this server
+(`473` invite-only, `474` banned, `471` full, `405` `CHANLIMIT`, `403` no such channel and creation
+forbidden, `460`/`719`/`690` variants, plus `FORWARD=f` diversion). **Design rule, so no implementer
+has to guess:** any numeric in reply to our `JOIN` is fatal to that channel — at startup, exit 12
+with the server text; mid-session, exit 11; for `create-channel`, exit 5 **and the previous channel
+is not parted** (`01#OQ2`). T-0.3(c) enumerates which of these this server can actually produce and
+turns this paragraph into a table; until then the catch-all is the contract.
 
 ## 2.4 Registration, nick failure, `+B`
 
@@ -115,9 +143,11 @@ TOPICLEN=390 UTF8ONLY WHOX draft/CHATHISTORY=1000
 - A single `PRIVMSG` whose line exceeds 512 bytes (tags included) is refused with
   `:irc.heapzilla.eu 417 cbver1 :Input line too long` (measured with a 620-byte payload).
 - **CONSTRAINT:** chatterbox computes the full serialized line — `@tags :nick!user@host PRIVMSG #chan :text`
-  — and keeps it ≤ `limits.max_line_bytes`, default **450**. The tag budget is not free:
-  `msgid=…;time=…;label=…` is ~90 bytes of overhead on echo, so the client-side budget must cover
-  what the server will add when it echoes back.
+  — and keeps it ≤ `limits.line_bytes`, default **450**, floor **200** (`03#3.7`). The tag budget is
+  not free: `msgid=…;time=…;label=…` costs **96 bytes** worst case on echo (measured overhead ≈ 90),
+  so the client-side budget has to cover what the server adds on the way back. **96 and `line_bytes`
+  are the only spellings in this plan** — revision 1 had 90 here, 96 in `04`, `max_line_bytes` in two
+  places and `line_bytes` in three, which is how a budget constant becomes a debate.
 - UTF-8 must be truncated at a char boundary; `UTF8ONLY` is advertised and a split codepoint would
   be a wire-level corruption bug.
 - Splitting is done at word boundaries where possible, keeping the separating space at the end of
@@ -210,7 +240,7 @@ Syntax that works on this server (`MSGREFTYPES=msgid,timestamp`):
 |---|---|---|
 | `CHATHISTORY LATEST <#chan> * 20` | newest ≤20, all-versions-ok | ✔ (a `*` must be a bare param; `timestamp=*` is **not** accepted → `FAIL CHATHISTORY INVALID_TARGET … :Messages could not be retrieved`) |
 | `CHATHISTORY LATEST <#chan> timestamp=<ISO8601> 20` | messages strictly after that time | ✔ |
-| `CHATHISTORY LATEST <#chan> msgid=<id> 20` | messages after that msgid | to be confirmed in T-0.3; expected by spec, `MSGREFTYPES` advertises it |
+| `CHATHISTORY LATEST <#chan> msgid=<id> 20` | messages after that msgid | **not yet exercised — T-0.3(a) is an M0 gate (`05`), not a to-do.** `MSGREFTYPES` advertises `msgid` and the spec says "after"; the fallback is `timestamp=<cursor.time − 1000 ms>` + msgid-LRU dedup, pre-written in `03#3.6` |
 | `CHATHISTORY BEFORE <#chan> timestamp=<ISO8601> 20` | messages before that time | ✔ |
 
 Reply shape — **CONSTRAINT, this is where naive parsers break:**
@@ -234,7 +264,10 @@ Five constraints follow:
    `BATCH -<id>`, ends the replay.
 3. Every replayed line carries `msgid` and `time` ⇒ the dedup key is `msgid` (join/quit entries get
    `_`-prefixed msgids; treat the msgid as opaque, `=` and `,` are escaped in tag values — decode
-   before comparing).
+   before comparing). **`msgid` is never an ordering key.** The three msgids in the transcript above
+   (`_p8txu58…`, `3gutycsm…`, `bnkwjgmp…`) are opaque and not monotonic, which is why `time` sorts and
+   msgid dedups; a test that asserts "msgids sort chronologically" would encode a false invariant
+   (UT-113).
 4. Join/part/quit history is replayed as **`PRIVMSG` from `HistServ!HistServ@localhost`**, i.e. it
    looks exactly like chat. FR2.4 requires suppressing it, and the gap-fill cursor must still advance
    over it. Filter = `nick == HistServ` and/or `host == localhost` service users, config-overridable.
@@ -262,6 +295,12 @@ that the tag is advisory, and never treats a missing tag as "not important".
 
 Rejected alternatives: TAGMSG-only (not relayed); a dedicated `[cbi]` acronym (opaque to humans);
 channel mode or nickname convention (not per-message).
+
+**One consequence the first edition did not state:** the marker is **unauthenticated**. Anyone in the
+channel — a human, a buggy agent, a non-chatterbox client — can type `[important] ` and force an
+unfiltered wake on every chatterbox listener present (`--wake mentions` does not suppress it, by
+FR3.3's own words). That makes it a Denial-of-attention vector, bounded by `--max-wakes` coalescing
+(`07#R7`), and it is why the skill tells the human the marker is a shared, unpolicied convention.
 
 ## 2.10 Presence: `NAMES`, `WHO`, `USERHOST`, `LIST`
 
@@ -307,7 +346,8 @@ serialised with one outstanding labelled batch at a time and the queue is bounde
 | Limit | Value | Source |
 |---|---|---|
 | IRC line, serialized | 512 bytes, tags included | server-enforced (`417`) |
-| chatterbox line budget | **450 bytes** | `limits.max_line_bytes`, headroom for echo tags |
+| chatterbox line budget | **450 bytes** (floor 200) | `limits.line_bytes`, headroom for echo tags |
+| worst-case tag budget | 96 bytes | `msgid`+`time`+`bot`+`label`, measured ≈ 90 (`02#2.5`) |
 | Multiline batch bytes | 4096 | CAP param, measured `FAIL … MULTILINE_MAX_BYTES 4096` |
 | Multiline batch lines | 100 | CAP param |
 | Nick length | 32 | `NICKLEN` |
@@ -317,7 +357,11 @@ serialised with one outstanding labelled batch at a time and the queue is bounde
 | One channel per listener | 1 | FR1.3, local rule |
 | Ping timeout | 150 s | measured, drives the 50/120 s keepalive |
 | Pending send queue | 64 | `limits.queue_capacity` |
-| Send ack timeout | 10 s | `limits.ack_timeout_secs` |
+| Send ack timeout | 10 s | `limits.ack_timeout_secs`, overridable per call by `--timeout` |
+| In-flight multiline batches | 1 | measured (`02#2.12`), serialise-or-reject |
+| Catch-up pages per gap | 3 | `ceil(channel-length/CHATHISTORY)+1` = `ceil(2048/1000)+1` |
+| Stdout wake buffer | 512 records | I3 (`06#6.1`); a drop does **not** advance the cursor (`03#3.6`) |
+| TLS write buffer / high water | 256 KiB / 220 KiB | `03#3.3`; high water ⇒ exit 17 |
 
 ## 2.14 Anti-pattern list (each item is a measured trap, for PR review)
 

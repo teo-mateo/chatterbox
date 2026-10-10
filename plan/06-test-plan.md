@@ -34,8 +34,12 @@ which serve several FRs at once.
 | UT-109 | `QUIT` is emitted and flushed before the socket closes on SIGTERM and SIGINT |
 | UT-110 | replay delivers in `time` order even when the batch arrives out of order |
 | UT-111 | a message present in both live traffic and replay is emitted once (msgid dedup) |
-| UT-112 | replay paging by msgid cursor terminates and requests ≤ 8 pages; retention cut logs the warning |
-| UT-113 | two messages sharing one `time` (ms collision) are both delivered, in msgid order |
+| UT-112 | replay paging terminates at `iterations_max = ceil(retention/page)+1`; hitting it logs a WARN naming the messages as unrecoverable (`03#3.6`) |
+| UT-113 | two messages sharing one `time` (ms collision, measured in `02#2.8`) are both delivered exactly once, stable-sorted by first-part `time` with arrival position breaking the tie — **not** "in msgid order", which asserts an invariant the measured msgids violate (`07#R4`) |
+| UT-115 | a live message arriving *during* a replay is emitted **after** the older backfilled records (single hold queue, `03#3.6`); revision 1 emitted it first and nothing covered it |
+| UT-116 | a wake dropped by I3 does **not** advance the cursor; the next gap fill re-delivers it |
+| UT-117 | a fresh process with a persisted cursor gap-fills from it — restarting is the documented recovery for drops, so it must not imply loss |
+| UT-118 | a timestamp cursor is queried at `time − 1000 ms` and the overlap absorbed by the msgid LRU, so the T-0.3(a) fallback is pre-tested rather than improvised |
 | UT-114 | gap fill advances the cursor over suppressed `HistServ` join/quit lines (no re-request loop) |
 
 **FR2 — delivery**
@@ -69,7 +73,7 @@ which serve several FRs at once.
 |---|---|
 | UT-140 | `send pi "x"` emits `PRIVMSG #chan :pi: x` (channel mode) |
 | UT-141 | `send --dm pi "x"` emits `PRIVMSG pi :x` and logs the "invisible to the human" warning once |
-| UT-142 | target not in NAMES cache → still sends, one stderr warning |
+| UT-142 | target not in the NAMES snapshot → **`no_target` (exit 18), nothing sent**; `--force` sends anyway. Revision 1 asserted "still sends, one stderr warning", which made an undeliverable send indistinguishable from a delivered one (`09#F2`) |
 | UT-143 | `--important` emits body `[important] pi: x` and the advisory tag, and detection on receive matches the same marker |
 | UT-144 | single line ≤ 450 B serialized (tag skeleton included) → one PRIVMSG, no batch |
 | UT-145 | 1 200 B text → one multiline batch of 3 lines, each ≤ budget, `draft/multiline-concat` on continuations |
@@ -93,7 +97,8 @@ which serve several FRs at once.
 | UT-161 | NAMES/WHO/USERHOST alone never yield `bot` (the measured absence of a mode field) |
 | UT-162 | WHOIS concurrency never > 1; queue drains; `335` result cached with TTL |
 | UT-163 | `channels` yields `last_activity = None` + `source = unavailable` for non-occupied channels, and the CHATHISTORY timestamp for the occupied one |
-| UT-164 | `create-channel #new` emits `PART #old` then `JOIN #new` and updates state; `--keep` → exit 2 |
+| UT-164 | `create-channel #new` emits `JOIN #new`, verifies the joined channel equals the request, and only **then** `PART #old`; state updated, `--keep` → exit 2. Revision 1 asserted `PART`-first, which is the order that can strand the listener with no channel and delete the one the human was watching (`09#F1`) |
+| UT-165 | `create-channel` when JOIN is refused: no `PART` emitted, previous channel untouched, exit 5 (`02#2.3a`) |
 
 **FR5 — identity**
 
@@ -126,13 +131,24 @@ which serve several FRs at once.
 | UT-190 | socket dir 0700, socket inode 0600 immediately after bind |
 | UT-191 | `SO_PEERCRED` uid mismatch → `peer_uid` reply then close, nothing sent to the server |
 | UT-192 | request > 1 MiB → `bad_request`, connection closed |
+| UT-193 | a pre-existing runtime dir owned by another uid, a symlink, or mode ≠ 0700 → refused (exit 2) naming the path; no silent fallback (`07#R18`) |
+| UT-194 | a socket inode owned by another uid is never connected to; `peer_uid` (15) and close |
+| UT-195b | the cursor file is written atomically at 0600; a crash mid-write leaves the previous cursor usable |
 
 **Cross-cutting**
 
 | ID | Assertion |
 |---|---|
 | UT-195 | `skill/SKILL.md` ≤ 4 KB and contains the required section headings |
+| UT-310 | our serializer can never emit `CAP ACK` as a granting step (scoped claim: `02#2.2` records what this server did; a client `ACK` in reply to `CAP NEW`/`CAP DEL` remains legal and unused) |
+| UT-318 | the transcripts in `02` are checked **raw** — exact octets in, exact structures out — before any normalisation |
+| UT-319 | the chathistory envelope transcript parses to the exact message set, including the nested multiline child and the `HistServ` lines |
 | UT-320 | every exit code in `04#4.6` is produced by at least one test in the suite (`ALL_CODES` iterated) |
+| UT-322 | the 512-octet budgeter runs against `fake_ircd`'s measured tag overhead: a message passing the client budget is never rejected by the server |
+| UT-400 | `fake_ircd` self-test: registration → join → labelled echo → nested chathistory replay → `401` with label, through the real client stack (`T-1.0`'s done-when) |
+| UT-197 | every code in `err::ALL_CODES` appears in `skill/SKILL.md` §6 — an agent cannot recover from a failure it cannot name |
+| UT-198 | every `chatterbox …` example in the skill parses against the real argument parser (`--dry-run`) |
+| UT-199 | exit 9 / exit 14 output on a **non-TTY** stderr contains `<host:port>` and **no** presented fingerprint (`07#R16`) |
 | UT-196 | fake server without `draft/chathistory` → exit 13 with readable text (no panic), i.e. portability |
 
 **`UT-3xx` codec internals** (M1): UT-301..304 line codec incl. partial buffering and continuation
@@ -177,6 +193,14 @@ the table above).
 | IT-228 | `status --json` shape | matches `03#3.4` keys |
 | IT-229 | consumer stops reading stdout | listener keeps answering PING for 180 s, then logs `stdout stalled` with a drop count |
 | IT-230 | `listen` + `status` + SIGTERM | exit 0, socket and instance file gone, `QUIT` seen by the server |
+| IT-232 | ack timeout with the request **still queued** ⇒ nothing written, queue drained when the CLI disconnects; ack timeout **after write** ⇒ `delivery=uncertain`, exit 6, hint carries no retry advice (`07#R15`) |
+| IT-233 | a second `listen --as <same nick>` dies on `433` and leaves the first listener's socket and instance file intact (`07#R18`) |
+| IT-234 | `listen` against a closed port retries on the backoff and reaches READY once the fake server starts; `--no-retry` exits 16 with a `tcp` sub-label |
+| IT-235 | `create-channel` when JOIN is refused (fake `473` mode) ⇒ exit 5, previous channel still joined, no `PART` emitted |
+| IT-236 | `--wake mentions` against five messages (two addressed, one important-unaddressed, two junk) prints exactly three lines — the wake filter tested as a filter, not through a schema assertion |
+| IT-237 | `MODE +B` refused by the fake (`674`) ⇒ listener starts, WARNs `bot_mode_refused`, `status.server.bot_mode = "refused"`; `doctor` reports it |
+| IT-238 | mid-session `CAP DEL :draft/multiline` ⇒ unhealthy, reconnect, re-assert; a second DEL degrades to plain splits with a WARN (`04#4.7` rule 6) |
+| IT-208b | `--json --state` record schema, and proof the records carry no `@`/`+` token |
 | IT-231 | send path under the TCP-open interlock | zero TCP socket creations by a send command (FR3.1) |
 
 ## 6.4 The live harness and the probe pattern
@@ -214,7 +238,8 @@ consumed is what produced the misleading `410` during planning).
    behind, and unregistered channels disappear on PART (`02#2.11`).
 3. Announce once, in the test channel, not in `#hof`. `#hof` gets exactly one line per live test
    run, and only if the test needs the shared channel (E2E-2/E2E-5 do).
-4. Never send > 120 lines per channel per run — that is the multiline limit and also good manners.
+4. Never send a message over 100 lines, and stay under ~120 lines per channel per run — 100 is the
+   measured `max-lines` (`02#2.6`); the rest is good manners.
 5. Rate: no more than ~4 messages/s; Ergo's fakelag will delay us and the test would then fail for
    the wrong reason.
 6. Credentials: none. The live tests must work without an oper account, an account registration, or
@@ -231,16 +256,18 @@ first failure with the captured stdout/stderr of the failing step.
 | E2E-1 | 1 | two listeners `cbliveA`, `cbliveB` + scripted human client joining `#cbtest<run>` | all three in NAMES; both listeners `status.connected=true` |
 | E2E-2 | 2 | `chatterbox whos-there --as cbliveA` | 3 participants, A and B `bot`, the scripted client `human` (it has no `+B`) |
 | E2E-3 | 3 | `publish "planning step 3"` on A; watch B's stdout; grep the human client's transcript | exactly one wake line on B, `kind=bot`, and the human transcript contains the raw PRIVMSG |
-| E2E-4 | 4 | B: `send --important cbliveA "step four"`, A running with `--wake mentions` | A prints it despite being addressed-only, flags contain `+`, human transcript shows `[important] cbliveA: step four` |
-| E2E-5 | 5 | scripted human PRIVMSGs `pi: hello` to the channel | both listeners print one line, `kind=hum`, addressed flag set |
+| E2E-4 | 4 | B: `send --important cbliveA "step four"`, A running with `--wake mentions` | A prints it despite `--wake mentions`, **flags exactly `@+`** (addressed *and* important — revision 1 accepted `+` alone, which is what a raw-body matcher produced), human transcript shows `[important] cbliveA: step four` |
+| E2E-5 | 5 | scripted human PRIVMSGs **`cbliveA: hello from human` and `cbliveB: hello from human`** (a literal `pi:` would be addressed to nobody — `06#6.5` rule 1 forbids other nicks) | both listeners print one line, `kind=hum`, addressed flag set |
 | E2E-6 | 6 | human posts 3 messages while A is isolated by `proxy.py` (pause 20 s, resume) | A prints each of the 3 exactly once, in order, `source=backfill`; A's stderr says `catchup complete: 3` |
 | E2E-7 | 7 | SIGTERM A's listener, then `whos-there` from B | A absent within 5 s (before the server ping timeout), `PART`/`QUIT` seen by the human client |
 | E2E-8 | — | fake `KICK` via the fake server only | exit 12 (IT-205); E2E version skipped if oper access is unavailable |
 | E2E-9 | — | `channels` while `#hof` and the test channel are occupied | both listed; `#hof` has an activity timestamp, the other `-` |
-| E2E-10 | — | `create-channel #cbtest<run>2` | `LIST` afterwards shows the new channel with A in it and the old one gone or unoccupied |
+| E2E-10 | — | `create-channel #cbtest<run>2`, then the same against the fake with JOIN refused | `LIST` shows the new channel with A in it and the old one gone or unoccupied, stderr naming the abandoned channel; on refusal exit 5 with the original channel untouched |
 | E2E-11 | — | wrong pin in the store | exit 9, both fingerprints in the message; after `trust`, connect works |
 | E2E-12 | FR8.1 | a fresh agent session given only `chatterbox skill` output, no other context | it starts a listener, sends one message, receives one reply, and quotes the etiquette line |
 | E2E-13 | — | `doctor` on a machine with no pin and no listener | non-zero, first failing precondition named |
+| E2E-14 | FR2.6 | listener on `--json --state`, network isolated 30 s then restored | `state` records for `disconnected`, `reconnecting`, `reconnected`/`catchup_complete` on stdout; they also appear under `--wake mentions` (filter-exempt) and never carry a `@`/`+` token |
+| E2E-15 | FR4.1 | `whos-there --wait 10` live, ~5 members | every participant reports `bot` or `hum`, none `?`, inside the wait window — proof that `T-3.8`'s priming plus the WHOIS queue converge, which no fake can show |
 
 E2E-6 is the one that cannot be faked convincingly, which is why `proxy.py` exists: a 60-line
 Python TLS relay (`127.0.0.1:16697 → tiny2:6697`) that the test can pause and resume, giving a
@@ -252,9 +279,17 @@ real socket teardown and a real gap without needing server operator rights.
 pull request / push to main:
   fmt --check → clippy --all-targets -- -D warnings → cargo test (UT + IT, fake server)
   → cargo deny check → cargo audit → musl release build → chatterbox --version smoke
-workflow_dispatch (manual, never required for merge):
-  live tests against tiny2 + acceptance.sh + a nightly re-run of the raw probes in 6.4
+workflow_dispatch + schedule (nightly, on a **self-hosted LAN runner**):
+  live tests against tiny2 + acceptance.sh + the raw probes in 6.4, recording results to the issue tracker
+build (all targets, no smoke): x86_64/aarch64-unknown-linux-musl + aarch64/x86_64-apple-darwin
 ```
+
+Two things revision 1 got wrong here. First, `192.168.0.204` is RFC1918: a hosted runner cannot reach
+it, so a live job without a self-hosted runner is a job that never runs and a green tick that means
+nothing. Second, the probe was advisory. It is now a **gate**: `v0.1.0` cannot be tagged while the
+nightly probe is red, because every protocol claim in `02` — and therefore FR1.6, FR3.4, FR5.3,
+FR6.3 — rests on it (`07#R12`). macOS targets are built and never smoked, and the release notes say
+so (`07#R19`).
 
 Design choices worth keeping: the live job is dispatchable rather than required, because tiny2 is a
 home server and a laptop off the VPN must not turn CI red; the nightly raw-probe job re-runs `02`
@@ -275,36 +310,49 @@ does. Changes here must be mirrored in `01`.
 |---|---|---|---|
 | FR1.1 | UT-101..104 | IT-201, IT-202 | E2E-1 |
 | FR1.2 | UT-105 | IT-203 | E2E-2 |
-| FR1.3 | UT-106 | IT-205 | E2E-8 |
-| FR1.4 | UT-107 | IT-204 | LIVE |
+| FR1.3 | UT-106 | IT-205, IT-235 | – |
+| FR1.4 | UT-107 | IT-204, IT-233 | LIVE-5 |
 | FR1.5 | UT-108, UT-109 | IT-230 | E2E-7 |
-| FR1.6 | UT-110..114 | IT-206, IT-209 | E2E-6 |
+| FR1.6 | UT-110..118 | IT-206, IT-209 | E2E-6, LIVE-1 |
 | FR2.1 | UT-120..123 | IT-207 | E2E-3 |
-| FR2.2 | UT-124..127 | IT-217 | E2E-2, E2E-5 |
+| FR2.2 | UT-124..127 | IT-217 | E2E-2, E2E-5, LIVE-3 |
 | FR2.3 | UT-128 | IT-208 | E2E-3 |
 | FR2.4 | UT-129..133 | IT-209, IT-213 | E2E-3 |
-| FR2.5 | UT-134..138 | IT-208 | E2E-4 |
-| FR2.6 | UT-139 | IT-210, IT-229 | E2E-6 |
-| FR3.1 | UT-144 | IT-211, IT-231 | E2E-3 |
+| FR2.5 | UT-134..139 | IT-236 | E2E-4 |
+| FR2.6 | UT-139 | IT-210, IT-229, IT-208b | E2E-6, E2E-14 |
+| FR3.1 | UT-140, UT-141 | IT-211, IT-231 | E2E-3 |
 | FR3.2 | UT-140..142 | IT-212 | E2E-4 |
 | FR3.3 | UT-143 | IT-213 | E2E-4 |
-| FR3.4 | UT-144..149 | IT-214 | LIVE |
-| FR3.5 | UT-150..153 | IT-211, IT-215 | E2E-3 |
+| FR3.4 | UT-144..149 | IT-214, IT-238 | LIVE-6 |
+| FR3.5 | UT-150..157 | IT-211, IT-215, IT-232 | E2E-3 |
 | FR3.6 | UT-154..156 | IT-216 | E2E-13 |
-| FR4.1 | UT-160..162 | IT-217 | E2E-2 |
-| FR4.2 | UT-163 | IT-218 | E2E-9 |
-| FR4.3 | UT-164 | IT-219 | E2E-10 |
+| FR4.1 | UT-160..162 | IT-217 | E2E-2, E2E-15, LIVE-3 |
+| FR4.2 | UT-163 | IT-218 | E2E-9 (partial: own channel only, see `01#OQ4`) |
+| FR4.3 | UT-164, UT-165 | IT-219, IT-235 | E2E-10 |
 | FR5.1 | UT-170, UT-171 | IT-220 | E2E-1 |
 | FR5.2 | UT-172..174 | IT-216 | E2E-1 |
-| FR5.3 | UT-175..178 | IT-221, IT-224 | LIVE |
+| FR5.3 | UT-175..178 | IT-221, IT-224 | LIVE-2 |
 | FR6.1 | UT-180..183 | IT-222, IT-226 | E2E-13 |
-| FR6.2 | UT-184..189 | IT-223, IT-223b | E2E-11 |
-| FR6.3 | UT-190..192 | IT-224 | LIVE |
+| FR6.2 | UT-184..189, UT-199 | IT-223, IT-223b | E2E-11, LIVE-4 |
+| FR6.3 | UT-190..195b | IT-224, IT-233 | LIVE-2 |
 | FR7.1 | – | IT-211 | E2E-3, E2E-5 |
 | FR7.2 | UT-126 | IT-217 | E2E-5 |
 | FR7.3 | – | – | E2E-5 |
-| FR8.1 | UT-195 | IT-227 | E2E-12 |
+| FR8.1 | UT-195, UT-197, UT-198 | IT-227 | E2E-12 |
 
 `–` means "no test of that layer exists by design": FR7.1/FR7.3/FR2.x human-visible properties are
-only checkable against a real IRC client, so they live in E2E. `02#2.13` limits are asserted by
-UT-144..149 and the fake server's own limits.
+only checkable against a real IRC client, so they live in E2E, and FR1.3's rule is checked by IT-205
+and IT-235 rather than by an E2E test that would need an oper to kick someone. `02#2.13` limits are
+asserted by UT-144..149 and the fake server's own limits.
+
+`LIVE-n` are the numbered live checks of `06#6.4`, so that DoD item 4 ("every FR has at least one
+green test **with an id**") is satisfiable against the real server:
+
+| ID | Live scenario | FR |
+|---|---|---|
+| LIVE-1 | kill the relay mid-session, restart, compare stdout against a scripted message script: each message exactly once, in order | FR1.6 |
+| LIVE-2 | two listeners plus a plain client; `send`/`publish`/uid-mismatch paths on the real socket | FR3.x, FR5.3, FR6.3 |
+| LIVE-3 | `whos-there` with one `+B` client and one plain client: kinds correct, no `?` after `--wait` | FR2.2, FR4.1 |
+| LIVE-4 | wrong pin against the real endpoint: exit 9, no fingerprint on a non-TTY, `trust` recovers | FR6.2 |
+| LIVE-5 | deliberate nick collision: exit 10, no auto-rename, message names the holder | FR1.4, FR1.5 |
+| LIVE-6 | a > 512-byte message arrives at a plain client as one logical multi-line message | FR3.4, FR7.1 |
