@@ -2,104 +2,113 @@
 
 Each task lists what it implements and how it is known to be done. Test identifiers refer to [06-testing-and-acceptance.md](06-testing-and-acceptance.md).
 
-## M0. Bootstrap and spikes
+## M0. Sign-off, bootstrap, spikes
 
 | Task | Description | Done when |
 |---|---|---|
-| T0.1 | Create the Go module, directory layout of 02 §2, `Makefile` targets `build`, `test`, `test-integration`, `lint` | `make build` produces `bin/chatterbox`; `chatterbox version` prints a version |
-| T0.2 | CI workflow: build, `go vet`, `staticcheck`, unit tests with `-race` | workflow green on the branch |
-| T0.3 | Local Ergo harness in `test/ergo/`: script that fetches a pinned Ergo 2.19.x release, generates a self-signed certificate, starts it on a random port with a test config (history on, multiline on, no accounts required), and stops it | `make ergo-up` then a raw TLS `CAP LS` shows the same capabilities as tiny2 |
-| T0.4 | Run spikes S1–S12 against the harness and, where the question is about deployment configuration, against tiny2. Record results in `08-risks-and-spikes.md` | every spike has a recorded answer; decisions D1, D2, D4 confirmed or revised |
-| T0.5 | Get sign-off on D1–D5 from the issue owner | answers recorded in issue #1 |
+| T0.1 | Owner sign-off on D5 (language) and D3 (nickname) | recorded in issue #1 |
+| T0.2 | Go module, directory layout of 02 §2, `Makefile` targets `build`, `test`, `test-integration`, `lint` | `make build` produces `bin/chatterbox`; `chatterbox version` prints a version |
+| T0.3 | Local Ergo harness in `test/ergo/`: fetch a pinned Ergo 2.19.x release, generate a self-signed certificate, start on a free port with the test config of 06 §2, stop | `make ergo-up`, then a raw TLS `CAP LS` shows the capabilities listed in 01 §2 |
+| T0.4 | CI: build, `go vet`, `staticcheck`, unit tests with `-race`, and the integration suite against the harness | workflow green on the branch |
+| T0.5 | Spike S3 (history of channels the client is not in) first, and take the result to the owner with the options of D4 | D4 confirmed or replaced |
+| T0.6 | Spikes S1, S2, S4–S14 against the harness, and against tiny2 where the question is about that deployment. Record each result in 08 | every spike has a recorded answer; affected sections of 03 updated |
+| T0.7 | Owner sign-off on the remaining decisions listed in 01 §5 | recorded in issue #1 |
 
 ## M1. Config, identity, TLS
 
 | Task | Description | Done when |
 |---|---|---|
-| T1.1 | `internal/config`: parse TOML, defaults, precedence flag > env > file > default, unknown-key error, missing-server error | UT-CFG |
-| T1.2 | `internal/identity`: nickname validation, ASCII and rfc1459 casemapping, nick resolution for `listen` | UT-ID |
-| T1.3 | Runtime directory creation and permission checks, socket and lock path derivation | UT-ID |
-| T1.4 | `internal/tlspin`: fingerprint computation, pin file read and atomic locked write, the four-step verification of 04 §6, mismatch error text | UT-PIN |
-| T1.5 | CLI skeleton: subcommand dispatch, `help`, usage errors with exit 2, `--` and `-` handling | UT-CLI |
+| T1.1 | `internal/config`: TOML parsing, defaults, precedence flag > env > file > default, unknown-key error, missing-server error, `[tuning]` overrides | UT-CFG |
+| T1.2 | `internal/identity`: agent nickname validation, casemapping (ASCII and rfc1459), nickname resolution per command class (D15) | UT-ID |
+| T1.3 | Runtime directory: location, creation, ownership/mode/symlink checks, socket and lock paths, socket path length check | UT-ID |
+| T1.4 | `internal/tlspin`: fingerprint computation and normalization, trust file read and atomic locked write, the four cases of 04 §6, error texts | UT-PIN |
+| T1.5 | CLI skeleton: subcommand dispatch, interspersed flags, `--`, `-`, rejection of unknown dash-arguments, `help`, exit 2 on usage errors | UT-CLI |
 
 ## M2. Listener core
 
 | Task | Description | Done when |
 |---|---|---|
-| T2.1 | `internal/irc`: TLS dial using `tlspin`, line reader and writer, 512-byte and tag-length limits, parsing through `ircmsg` | UT-IRC |
-| T2.2 | Capability negotiation: `CAP LS 302` with continuation lines, `CAP REQ`, `ACK`/`NAK`, required-capability check with a clear error naming what is missing | UT-IRC, IT-CAPS |
-| T2.3 | Registration: `NICK`, `USER`, `001`, `005` parsing (`BOT`, `CASEMAPPING`, `CHATHISTORY`, `NICKLEN`, `CHANTYPES`, `CHANNELLEN`, `MSGREFTYPES`), 433 and 432 handling | IT-NICK |
-| T2.4 | Bot mode: set `+B`, confirm, exit if unsupported | IT-BOT |
-| T2.5 | Join exactly one channel, join error handling, record own hostmask, reject a second channel at the CLI | IT-JOIN, UT-CLI |
-| T2.6 | Listener state machine and core goroutine of 02 §3 (without backoff and catch-up, which are M6) | UT-FSM |
-| T2.7 | Keepalive: server `PING` replies, client `PING`, idle timeout | UT-FSM, IT-PING |
-| T2.8 | Clean shutdown on SIGINT, SIGTERM, SIGHUP: `QUIT`, exit 0. Exit on closed stdout, including hang-up polling | IT-EXIT |
-| T2.9 | Lock file: refuse a second listener for the same nickname; replace stale sockets | IT-LOCK |
-| T2.10 | stderr diagnostics for every state change; nothing but message lines on stdout | IT-STDOUT |
+| T2.1 | `internal/irc`: TLS dial with `tlspin`, line reader and writer, line and tag length limits, parsing through `ircmsg` | UT-IRC |
+| T2.2 | Write queue with atomic units and two alternating queues (02 §5) | UT-WQ |
+| T2.3 | Capability negotiation: `CAP LS 302` with continuation lines, `REQ`, `ACK`/`NAK`, `NEW`/`DEL`, required-capability error naming what is missing | UT-IRC, IT-CAPS |
+| T2.4 | Registration: `NICK`, `USER`, `001`, `005` parsing (`BOT`, `CASEMAPPING`, `CHATHISTORY`, `NICKLEN`, `CHANTYPES`, `CHANNELLEN`), 433 and 432 | IT-NICK |
+| T2.5 | Bot mode: set, confirm, exit if unsupported | IT-BOT |
+| T2.6 | Join exactly one channel, join errors, record own hostmask and the join echo's time | IT-JOIN |
+| T2.7 | Listener state machine and core goroutine (02 §3), with first-connection failures fatal (D16). Reconnection is M6 | UT-FSM, IT-FIRSTFAIL |
+| T2.8 | Keepalive: `PING` replies, client `PING`, idle timeout | UT-FSM, IT-PING |
+| T2.9 | Shutdown: SIGINT/SIGTERM/SIGHUP send `QUIT` and exit 0; SIGPIPE ignored; exit on stdout write error and on stdout hang-up | IT-EXIT |
+| T2.10 | Lock file, held for the process lifetime and never removed; second listener for the same nickname refused | IT-LOCK |
+| T2.11 | stderr diagnostics for state changes, sparse by default, `--verbose` for the rest; nothing but message lines on stdout | IT-STDOUT |
+| T2.12 | Parent-process watching, if S14 shows it is reliable for the target harnesses | IT-EXIT (parent case), or recorded as not done with the reason |
 
 ## M3. Inbound delivery
 
 | Task | Description | Done when |
 |---|---|---|
-| T3.1 | Batch assembler: nested batches, `draft/multiline` to one message with `multiline-concat` | UT-BATCH |
-| T3.2 | Message model and classification: own-message drop, chat-vs-noise, sender kind from `bot` tag, CTCP handling, formatting-code stripping | UT-INB |
-| T3.3 | Importance detection and token removal (D6) | UT-INB |
+| T3.1 | Batch assembler: nested batches, `draft/multiline` into one message, `multiline-concat` | UT-BATCH |
+| T3.2 | Message model and classification: own-message drop, chat vs noise, sender kind from the `bot` tag, CTCP, formatting-code stripping | UT-INB |
+| T3.3 | Address-prefix parsing, importance detection, token removal (D6) | UT-INB |
 | T3.4 | Addressed detection (D8) under the server's casemapping | UT-INB |
-| T3.5 | Wake filter `all` and `addressed` (D7) | UT-INB |
-| T3.6 | Text encoder with the escaping of 04 §3 | UT-FMT (golden files) |
-| T3.7 | JSON encoder | UT-FMT (golden files) |
-| T3.8 | Single stdout writer; whole-line writes; exit on write error | IT-STDOUT |
-| T3.9 | Membership tracking from names, `JOIN`, `PART`, `QUIT`, `KICK`, `NICK` | UT-MEM |
-| T3.10 | Kick and forced nick change handling (D14) | IT-KICK |
+| T3.5 | Wake filter (D7) | UT-INB |
+| T3.6 | Text encoder with the escaping of 04 §3 | UT-FMT |
+| T3.7 | JSON encoder, HTML escaping off | UT-FMT |
+| T3.8 | stdout writer: bounded queue, whole-line writes, exit when the queue stays full (02 §3) | IT-STDOUT, IT-BACKPRESSURE |
+| T3.9 | Membership tracking | UT-MEM |
+| T3.10 | Kick and forced nickname change (D14) | IT-KICK |
 
 ## M4. Control socket and sending
 
 | Task | Description | Done when |
 |---|---|---|
-| T4.1 | `internal/control` server: socket creation with `0600` in a `0700` directory, peer uid check, request size limit, one request per connection, JSON protocol v1 | UT-CTL, IT-PERM |
-| T4.2 | `internal/control` client: listener resolution (`--as`, env, auto-detect), FR3.6 error text, ambiguity error, deadline | UT-CTL, IT-DISCOVER |
-| T4.3 | `internal/outbound`: line budget from hostmask, UTF-8-safe cutting, multiline batch construction, splitting over `max-bytes` and `max-lines`, prefix repeated per part, size cap | UT-OUT (table and property tests) |
-| T4.4 | Label allocation and correlation: labeled echo, labeled error numerics, `FAIL`, timeout | UT-LABEL, IT-ACK |
-| T4.5 | Outgoing queue: strictly sequential sends across control clients | IT-ORDER |
-| T4.6 | `publish` command, including `--important` and stdin | IT-PUBLISH |
-| T4.7 | `send` command: addressed channel message, membership check, `--private`, `--important` | IT-SEND |
-| T4.8 | Mapping of control error codes to exit codes and messages (04 §2) | UT-CLI |
+| T4.1 | Control server: umask before bind, stale socket removal under the lock, peer uid check, request size limit, protocol v1 with progress lines, abort on client disconnect | UT-CTL, IT-PERM |
+| T4.2 | Control client: nickname resolution, discovery with parallel probes, FR3.6 text including the runtime directory, idle deadline | UT-CTL, IT-DISCOVER |
+| T4.3 | Text normalization (03 §5): UTF-8 and NUL check, line endings, trailing newline, empty text, size limit | UT-OUT |
+| T4.4 | Splitting: line budget, UTF-8-safe cuts preserving spaces, concat rules, `max-bytes` and `max-lines`, prefix and `(i/n)` on each part | UT-OUT |
+| T4.5 | Labels: allocation, labeled echo, labeled errors and `FAIL`, timeout scaled by unit size | UT-LABEL, IT-ACK |
+| T4.6 | Message queue: strict order across requests; waiting up to 5 s for `ready` (D9) | IT-ORDER, IT-NOTCONN |
+| T4.7 | `publish`, with `--important` and stdin | IT-PUBLISH, IT-IMPORTANT |
+| T4.8 | `send`: addressed channel message, membership check, `--private`, `--important` | IT-SEND, IT-IMPORTANT |
+| T4.9 | Error-code to exit-code mapping and messages stating whether the message was sent (04 §2) | UT-CLI |
 
 ## M5. Presence and channels
 
 | Task | Description | Done when |
 |---|---|---|
-| T5.1 | `names` operation: labeled `WHO`, bot flag from the `BOT` letter; `whos-there` text and JSON output | IT-WHO |
-| T5.2 | `channels` operation: labeled `LIST`, bounded `CHATHISTORY LATEST` lookups, unknown handling; `channels` output | IT-CHANNELS |
-| T5.3 | `create_channel` operation per D2, including the revert path and catch-up state reset | IT-CREATE |
+| T5.1 | `names` operation and `whos-there` output | IT-WHO |
+| T5.2 | `channels` operation: `LIST`, own channel first, bounded and time-budgeted lookups, stop after a non-member refusal; output | IT-CHANNELS |
+| T5.3 | `create_channel` operation per 03 §8: announcement, move, operator check, return with catch-up, exit when return fails, new channel becomes the reconnect target | IT-CREATE |
 
 ## M6. Resilience
 
+Needs M3 (delivery) and M4 (`publish`, for the not-connected behavior).
+
 | Task | Description | Done when |
 |---|---|---|
-| T6.1 | Reconnect loop with exponential backoff and jitter; reset after stable connection; first connect uses the same loop | UT-BACKOFF, IT-RECONNECT |
-| T6.2 | Classification of fatal and retried failures (02 §3), including 433 on reconnect with the 5-minute bound (D10) | IT-GHOST |
-| T6.3 | Tracking of `lastMsgid`, `lastTime` and the bounded recent-id set | UT-DEDUP |
-| T6.4 | Catch-up: `CHATHISTORY AFTER` with pagination, `msgid` then `timestamp` fallback, replay cap, discard of unsolicited history batches | IT-CATCHUP |
+| T6.1 | Reconnect loop: exponential backoff with jitter, reset after a stable connection | UT-BACKOFF, IT-RECONNECT |
+| T6.2 | Fatal vs retried failures after first `ready` (02 §3); 433 with the D10 window, by redialing | IT-GHOST |
+| T6.3 | `lastTime` from server times only, starting from the join echo; bounded `seen` set | UT-DEDUP |
+| T6.4 | Catch-up: timestamp reference with overlap, paging by fresh `msgid` until an empty batch, gap diagnostic, discard of unsolicited history batches | IT-CATCHUP, IT-CATCHUP-QUIET, IT-RESTART |
 | T6.5 | Live buffering during catch-up, ordered flush, dedup across history and live | UT-DEDUP, IT-CATCHUP |
-| T6.6 | Control requests fail with `not_connected` outside `ready` | IT-NOTCONN |
-| T6.7 | `replayed` flag in both output formats | UT-FMT |
+| T6.6 | `replayed` flag in both formats | UT-FMT |
+| T6.7 | Catch-up reused by the `create-channel` return path | IT-CREATE |
 
 ## M7. Onboarding and packaging
 
+Needs M5, so that the instructions cover every command.
+
 | Task | Description | Done when |
 |---|---|---|
-| T7.1 | `skills/chatterbox/SKILL.md`: starting the listener in the background, watching its output, line format, the commands, setting `CHATTERBOX_NICK`, etiquette (reply only when a reply is needed, do not acknowledge acknowledgements, use `send` for one participant and `publish` for everyone, reserve `--important`) | reviewed against FR8.1; AT-ONBOARD |
-| T7.2 | `docs/agent-snippet.md`: the same content as a block to paste into an agent instruction file, harness-neutral | present and linked from README |
-| T7.3 | Project `README.md`: what it is, install, config, quick start for two agents and a human, limitations (no private-message catch-up, ephemeral channels) | present |
-| T7.4 | Release build: `make release` for linux and darwin, amd64 and arm64, version stamped | four binaries produced |
+| T7.1 | `skills/chatterbox/SKILL.md`. Contents: starting the listener in the background and watching its output; the line format; every command with `--as <own nick>`; etiquette (reply only when a reply is needed, never acknowledge an acknowledgement, `send` for one participant and `publish` for everyone, `--important` sparingly); stopping the listener when done; what `replayed` and `(i/n)` mean; that `human` and sender names are not authenticated and private messages can come from anyone on the server | reviewed against FR8.1; AT-ONBOARD |
+| T7.2 | `docs/agent-snippet.md`: the same content as a harness-neutral block to paste into an agent instruction file | present, linked from the README |
+| T7.3 | Project `README.md`: what it is, install, config, quick start for two agents and a human (including how a human addresses an agent: `nick:` or `@nick`), required Ergo settings (history on, bot mode, no forced accounts), limitations (private messages not recovered after a disconnect, channels are ephemeral, last activity only where the server exposes it) | present |
+| T7.4 | Release build for linux and darwin, amd64 and arm64, version stamped | four binaries produced |
 
 ## M8. Acceptance and hardening
 
 | Task | Description | Done when |
 |---|---|---|
-| T8.1 | Automated acceptance scenario, steps 1–7, against the Ergo harness | AT-1 to AT-7 green |
-| T8.2 | Manual acceptance on tiny2 `#hof` with two real agents and a human on a standard client | checklist in 06 §5 completed |
-| T8.3 | Soak: two listeners for 12 hours with periodic forced disconnects | no duplicate or lost channel messages, no goroutine or memory growth |
-| T8.4 | Review of every stdout write path for FR2.4 and FR2.6 | `IT-STDOUT` covers each path |
-| T8.5 | Update issue #1 with final answers to the open questions and known limitations | issue updated |
+| T8.1 | Automated acceptance scenario against the harness | AT-1 to AT-7 green in both configurations |
+| T8.2 | Manual acceptance on tiny2 `#hof` with two real agents and a human on a standard client | checklist of 06 §5 completed |
+| T8.3 | Soak: two listeners for 12 hours with periodic forced disconnects | no duplicate or lost channel messages; no goroutine or memory growth |
+| T8.4 | Review every stdout write path for FR2.4 and FR2.6 | IT-STDOUT covers each path |
+| T8.5 | Update issue #1 with the final answers to the open questions and the known limitations | issue updated |
