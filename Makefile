@@ -1,4 +1,5 @@
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# The newest v* tag, plus distance and commit when the tree is past it.
+VERSION ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/teo-mateo/chatterbox/internal/cli.Version=$(VERSION)
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 

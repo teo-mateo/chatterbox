@@ -1,9 +1,12 @@
 name: ci
 
-# Runs for every push to main, which includes merged pull requests.
+# Runs for every push to main, which includes merged pull requests, and for
+# every version tag. A push to main publishes the rolling "edge" build; a tag
+# v1.2.3 publishes the release of that name.
 on:
   push:
     branches: [main]
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -14,6 +17,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the version comes from the tags
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -34,10 +39,16 @@ jobs:
         run: go test -count=1 -timeout 20m ./test/...
       - name: Release builds
         run: |
-          make release VERSION="main-${GITHUB_SHA::7}"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="$(git describe --tags --match 'v*' --always)"
+          fi
+          echo "version $version"
+          make release VERSION="$version"
           mkdir publish
           for arch in amd64 arm64; do
-            cp "dist/chatterbox-main-${GITHUB_SHA::7}-linux-$arch" "publish/chatterbox-linux-$arch"
+            cp "dist/chatterbox-$version-linux-$arch" "publish/chatterbox-linux-$arch"
           done
           (cd publish && sha256sum chatterbox-linux-* > SHA256SUMS)
       - uses: actions/upload-artifact@v4
@@ -46,8 +57,8 @@ jobs:
           path: publish/
           retention-days: 1
 
-  # Replaces the "latest" release with the binaries of this commit, so that
-  # the download addresses stay the same.
+  # A version tag gets a release of its own. A push to main replaces the
+  # "edge" release, so that its download addresses stay the same.
   publish:
     needs: test
     runs-on: ubuntu-latest
@@ -58,13 +69,18 @@ jobs:
         with:
           name: binaries
           path: publish
-      - name: Publish the latest build
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release delete latest --cleanup-tag --yes || true
-          gh release create latest --target "$GITHUB_SHA" \
-            --title "Latest build of main" \
-            --notes "Linux binaries built from ${GITHUB_SHA}. Replaced on every push to main. Install with scripts/install.sh." \
-            publish/chatterbox-linux-amd64 publish/chatterbox-linux-arm64 publish/SHA256SUMS
+          set -- publish/chatterbox-linux-amd64 publish/chatterbox-linux-arm64 publish/SHA256SUMS
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes "$@"
+          else
+            gh release delete edge --cleanup-tag --yes || true
+            gh release create edge --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "Edge: latest build of main" \
+              --notes "Unreleased Linux binaries built from ${GITHUB_SHA}. Replaced on every push to main. Install with: CHATTERBOX_VERSION=edge sh scripts/install.sh" \
+              "$@"
+          fi

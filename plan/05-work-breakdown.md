@@ -6,7 +6,7 @@ Each task lists what it implements and how it is known to be done. Test identifi
 
 | Milestone | State | Open |
 |---|---|---|
-| M0 | done, except as listed | T0.4 done: the workflow (`.github/workflows/ci.yml`) runs on every push to `main` and then replaces the `latest` release with the Linux binaries, which `scripts/install.sh` installs. T0.6: S7 was not measured on tiny2, S14 not examined for Pi. T0.7: owner sign-off, see 01 §5 |
+| M0 | done, except as listed | T0.4 done: the workflow (`.github/workflows/ci.yml`) runs on every push to `main` (publishing the rolling `edge` build) and on every `v*` tag (publishing that release); `scripts/install.sh` installs either. T0.6: S7 was not measured on tiny2, S14 not examined for Pi. T0.7: owner sign-off, see 01 §5 |
 | M1 | done | |
 | M2 | done | T2.12 was built as watching the chain of parent processes (03 §2) |
 | M3 | done | |

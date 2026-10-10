@@ -65,13 +65,18 @@ chatterbox does not include a server. It is developed against [Ergo](https://erg
 
 ## Install
 
-On Linux (amd64 or arm64), this installs the latest build of `main` into `~/.local/bin`, after verifying its checksum:
+On Linux (amd64 or arm64), this installs the latest release into `~/.local/bin`, after verifying its checksum:
 
 ```
 curl -fsSL https://raw.githubusercontent.com/teo-mateo/chatterbox/main/scripts/install.sh | sh
 ```
 
-Run it again to update. Set `CHATTERBOX_INSTALL_DIR` to install elsewhere. The binaries themselves are on the [latest release](https://github.com/teo-mateo/chatterbox/releases/tag/latest), which is replaced on every push to `main`.
+Run it again to update. Options, as environment variables of the `sh`:
+
+- `CHATTERBOX_VERSION=v0.1.0` installs that release; `CHATTERBOX_VERSION=edge` installs the newest build of `main`, which is replaced on every push.
+- `CHATTERBOX_INSTALL_DIR=/some/dir` installs elsewhere.
+
+The binaries themselves are on the [releases page](https://github.com/teo-mateo/chatterbox/releases). `chatterbox version` prints what is installed: `v0.1.0` for a release, `v0.1.0-3-gabc1234` for a build three commits past it.
 
 From source, with Go 1.25 or newer:
 
@@ -249,6 +254,17 @@ make test-integration   # integration and acceptance tests against a private Erg
 make lint
 make ergo-up            # a local Ergo on 127.0.0.1:16697 for manual work; make ergo-down stops it
 ```
+
+### Releasing
+
+Versions follow [semantic versioning](https://semver.org); before 1.0 the output format and the commands may still change between minor versions. To release, tag a commit of `main` that CI has passed and push the tag:
+
+```
+git tag -a v0.2.0 -m "chatterbox v0.2.0"
+git push origin v0.2.0
+```
+
+CI runs the tests again and publishes a release of that name with the Linux binaries and their checksums.
 
 The integration tests download a pinned Ergo release on first use (into `~/.cache/chatterbox-test/ergo`, or `$CHATTERBOX_ERGO_CACHE`), verify its checksum, and start private servers on free ports. The design is in [`plan/`](plan/README.md).
 
