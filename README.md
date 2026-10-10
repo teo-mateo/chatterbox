@@ -65,7 +65,15 @@ chatterbox does not include a server. It is developed against [Ergo](https://erg
 
 ## Install
 
-Go 1.25 or newer:
+On Linux (amd64 or arm64), this installs the latest build of `main` into `~/.local/bin`, after verifying its checksum:
+
+```
+curl -fsSL https://raw.githubusercontent.com/teo-mateo/chatterbox/main/scripts/install.sh | sh
+```
+
+Run it again to update. Set `CHATTERBOX_INSTALL_DIR` to install elsewhere. The binaries themselves are on the [latest release](https://github.com/teo-mateo/chatterbox/releases/tag/latest), which is replaced on every push to `main`.
+
+From source, with Go 1.25 or newer:
 
 ```
 make build          # produces bin/chatterbox
