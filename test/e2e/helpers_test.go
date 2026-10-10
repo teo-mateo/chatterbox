@@ -259,7 +259,17 @@ func (o *lopts) prepare(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0o600); err != nil {
+	// Listeners sharing a directory may be starting while this is written:
+	// replace the file in one step, so none reads it half-written.
+	tmp, err := os.CreateTemp(dir, "config-*.tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tmp.WriteString(cfg); err != nil {
+		t.Fatal(err)
+	}
+	tmp.Close()
+	if err := os.Rename(tmp.Name(), filepath.Join(dir, "config.toml")); err != nil {
 		t.Fatal(err)
 	}
 }
