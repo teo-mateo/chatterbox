@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: make build
+      - name: Vet
+        run: go vet ./...
+      - name: Staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@2025.1.1 ./...
+      - name: Unit tests
+        run: go test -race ./internal/...
+      - name: Cache the pinned Ergo release
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/chatterbox-test/ergo
+          key: ergo-${{ runner.os }}-${{ hashFiles('test/ergo/ergo.go') }}
+      - name: Integration and acceptance tests
+        run: go test -count=1 -timeout 20m ./test/...
+      - name: Release builds
+        run: make release
