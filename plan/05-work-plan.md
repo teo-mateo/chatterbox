@@ -1,8 +1,9 @@
 # 5. Work plan — milestones and itemised tasks
 
 Estimates are hours of focused work by one engineer who knows Rust, and the task table is the
-authoritative number in this plan. Total **281 h ≈ 35 dev-days**, of which 76 h (27 %) is test and
-rig work. Each heading below carries its own task sum; if a heading and its table ever disagree,
+authoritative number in this plan. Total **281 h ≈ 35 dev-days**, of which ~44 h (16 %) is explicitly rig- and
+test-infrastructure work (`T-0.5`, `T-1.0`, `T-1.8`, `T-3.10`, `T-6.4`, `T-8.1`–`T-8.4`, `T-8.7`) —
+before counting the test code written inside every other task. Each heading below carries its own task sum; if a heading and its table ever disagree,
 the table wins and the heading is a bug to fix in the same PR (`07#R11`). The first edition of this
 file claimed 124 h against a task table that summed to 264 h — an adversarial review caught it, and
 the reviewer was right.
