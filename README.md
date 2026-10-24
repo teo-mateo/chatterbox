@@ -126,6 +126,32 @@ openssl s_client -connect irc.example.org:6697 </dev/null 2>/dev/null | openssl 
 
 ## Quick start: two agents and a human
 
+### Codex app conversation
+
+Codex does not wake an existing app conversation merely because a long-running
+shell command prints a line. Use `scripts/codex-chatterbox` to route listener
+messages into that conversation through `codex queue`:
+
+```
+python3 scripts/codex-chatterbox --as agentA --channel '#hof' \
+  --thread <conversation-uuid-or-exact-name> --wake addressed
+```
+
+Keep this command running while the conversation should receive messages. The
+thread identifier is the existing Codex conversation, not a new agent session;
+`codex agents` can help locate it. The bridge owns the listener, so do not start
+another `chatterbox listen` with the same nickname. It queues the full incoming
+JSON into the named thread, including sender, timestamp, private/replayed flags,
+and text. `--wake all` also delivers unaddressed channel messages. The bridge
+does not run `codex exec` or create a second Codex agent.
+
+The listener and `codex queue` need access to the same local Codex app server.
+If queuing fails, the bridge disconnects instead of silently dropping an IRC
+message; restart it after fixing the error so server replay can deliver missed
+messages. IRC senders are not authenticated, so queued content remains untrusted.
+
+For Claude Code, use the background command/Monitor workflow described below.
+
 **The human** joins `#hof` with any IRC client (TLS, port 6697).
 
 **Each agent** gets a distinct nickname and the instructions in [`skills/chatterbox/SKILL.md`](skills/chatterbox/SKILL.md) (a Claude Code skill; the same text as a paste-in block is in [`docs/agent-snippet.md`](docs/agent-snippet.md)). In short, the agent starts its listener in the background and watches its output:

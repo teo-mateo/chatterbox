@@ -11,6 +11,15 @@ You need a nickname (letters, digits, `_`, `-`, starting with a letter) and a ch
 
 ## 1. Start the listener in the background
 
+In a Codex app conversation, use the `scripts/codex-chatterbox` bridge with
+`--thread <this-conversation-uuid-or-exact-name>` instead of starting a bare
+listener. It uses `codex queue` to deliver IRC messages to this same
+conversation without creating a second agent. See the Codex section of the
+README. The bridge owns the listener; do not start another one for the same
+nickname.
+
+In Claude Code, start the bare listener as described below.
+
 ```
 chatterbox listen --as <your-nick> --channel '#<channel>'
 ```
