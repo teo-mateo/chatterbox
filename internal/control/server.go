@@ -87,6 +87,7 @@ func (c *Call) Finish(r Response) {
 type Server struct {
 	ln   *net.UnixListener
 	path string
+	own  os.FileInfo // the socket file this server created
 	// Handle receives every valid request. It must arrange for
 	// Call.Finish to be called eventually.
 	Handle func(*Call)
@@ -99,24 +100,81 @@ type Server struct {
 	uid int
 }
 
-// Listen binds the control socket. The caller must hold the nickname's lock:
-// a socket file left at path is then known to be stale and is removed. The
-// process umask must already be 077 so the socket is never visible with
-// wider permissions.
+// ErrLive means a listener still answers on the socket although the caller
+// holds the lock: someone removed the lock file while that listener ran.
+type ErrLive struct {
+	Nick string
+	PID  int
+	Path string
+}
+
+func (e *ErrLive) Error() string {
+	who := "a listener"
+	if e.Nick != "" {
+		who = "a listener for " + e.Nick
+	}
+	if e.PID > 0 {
+		who += fmt.Sprintf(" (pid %d)", e.PID)
+	}
+	return fmt.Sprintf("%s is already running and answers on %s; its lock file was removed while it ran. "+
+		"Use that listener, or stop it, instead of starting another", who, e.Path)
+}
+
+// Listen binds the control socket. The caller must hold the nickname's lock.
+// A file left at path is removed only when it is not a socket, or when a
+// connection to it is refused: a listener that still answers is never
+// replaced (ErrLive), and when its state cannot be told the file is left in
+// place and Listen fails. The process umask must already be 077 so the
+// socket is never visible with wider permissions.
 func Listen(path string) (*Server, error) {
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("cannot remove the stale socket %s: %v", path, err)
+	if err := removeStale(path); err != nil {
+		return nil, err
 	}
 	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 	if err != nil {
 		return nil, fmt.Errorf("cannot create the control socket %s: %v", path, err)
 	}
 	ln.SetUnlinkOnClose(false)
-	if err := os.Chmod(path, 0o600); err != nil {
+	own, err := os.Lstat(path)
+	if err != nil {
 		ln.Close()
+		return nil, fmt.Errorf("cannot inspect the control socket %s: %v", path, err)
+	}
+	s := &Server{ln: ln, path: path, own: own, PeerUID: PeerUID, Heartbeat: 5 * time.Second, uid: os.Getuid()}
+	if err := os.Chmod(path, 0o600); err != nil {
+		s.Close()
 		return nil, err
 	}
-	return &Server{ln: ln, path: path, PeerUID: PeerUID, Heartbeat: 5 * time.Second, uid: os.Getuid()}, nil
+	return s, nil
+}
+
+// removeStale clears path for a new socket, or says why it cannot.
+func removeStale(path string) error {
+	fi, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("cannot inspect %s: %v", path, err)
+	}
+	if fi.Mode()&os.ModeSocket != 0 {
+		c, err := net.DialTimeout("unix", path, time.Second)
+		if err == nil {
+			c.Close()
+			live := &ErrLive{Path: path}
+			if r, err := Do(path, Request{Op: OpStatus}, 2*time.Second, nil); err == nil {
+				live.Nick, live.PID = r.Nick, r.PID
+			}
+			return live
+		}
+		if !errors.Is(err, syscall.ECONNREFUSED) {
+			return fmt.Errorf("cannot tell whether a listener still answers on %s (%v); the socket was left in place", path, err)
+		}
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("cannot remove the stale socket %s: %v", path, err)
+	}
+	return nil
 }
 
 // Serve accepts connections until Close.
@@ -130,10 +188,14 @@ func (s *Server) Serve() {
 	}
 }
 
-// Close stops accepting and removes the socket.
+// Close stops accepting and removes the socket file, but only while it is
+// still the one this server created: a file put there by another listener
+// stays.
 func (s *Server) Close() {
 	s.ln.Close()
-	os.Remove(s.path)
+	if fi, err := os.Lstat(s.path); err == nil && os.SameFile(fi, s.own) {
+		os.Remove(s.path)
+	}
 }
 
 func writeLine(c net.Conn, r Response) error {

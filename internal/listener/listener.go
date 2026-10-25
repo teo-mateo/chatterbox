@@ -251,6 +251,10 @@ func Run(opts Options) *ExitError {
 
 	srv, err := control.Listen(sock)
 	if err != nil {
+		var live *control.ErrLive
+		if errors.As(err, &live) {
+			return &ExitError{Code: exitNickInUse, Msg: err.Error()}
+		}
 		return &ExitError{Code: exitInternal, Msg: err.Error()}
 	}
 	srv.Handle = func(c *control.Call) { l.post(evCall{c}) }

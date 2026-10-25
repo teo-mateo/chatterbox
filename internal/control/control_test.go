@@ -298,3 +298,46 @@ func TestListenReplacesStaleSocket(t *testing.T) {
 		t.Error("Close left the socket file")
 	}
 }
+
+func TestListenRefusesLiveSocket(t *testing.T) {
+	path := tempSock(t, "a")
+	serve(t, path, statusHandler("agentA"))
+	_, err := Listen(path)
+	live, ok := err.(*ErrLive)
+	if !ok || live.Nick != "agentA" || live.PID != 42 ||
+		!strings.Contains(err.Error(), "a listener for agentA (pid 42) is already running") {
+		t.Fatalf("a second Listen on a live socket: %v", err)
+	}
+	if r, err := Do(path, Request{Op: OpStatus}, time.Second, nil); err != nil || r.Nick != "agentA" {
+		t.Errorf("the live listener lost its socket: %+v %v", r, err)
+	}
+}
+
+func TestListenReplacesDeadSocket(t *testing.T) {
+	path := tempSock(t, "a")
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.SetUnlinkOnClose(false)
+	ln.Close() // a socket file nobody listens on, as a crashed listener leaves it
+	s, err := Listen(path)
+	if err != nil {
+		t.Fatalf("a dead socket was not replaced: %v", err)
+	}
+	s.Close()
+}
+
+func TestCloseLeavesAnotherSocket(t *testing.T) {
+	path := tempSock(t, "a")
+	first, err := Listen(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(path) // someone removes the file; a second listener takes the path
+	serve(t, path, statusHandler("second"))
+	first.Close()
+	if r, err := Do(path, Request{Op: OpStatus}, time.Second, nil); err != nil || r.Nick != "second" {
+		t.Errorf("closing the first server removed the second one's socket: %+v %v", r, err)
+	}
+}
