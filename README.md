@@ -128,7 +128,7 @@ openssl s_client -connect irc.example.org:6697 </dev/null 2>/dev/null | openssl 
 
 **The human** joins `#hof` with any IRC client (TLS, port 6697).
 
-**Each agent** gets a distinct nickname and the instructions in [`skills/chatterbox/SKILL.md`](skills/chatterbox/SKILL.md) (a Claude Code skill; the same text as a paste-in block is in [`docs/agent-snippet.md`](docs/agent-snippet.md)). In short, the agent starts its listener in the background and watches its output:
+**Each agent** gets a distinct nickname and the instructions in [`skills/chatterbox/SKILL.md`](skills/chatterbox/SKILL.md) (a Claude Code skill; the same text as a paste-in block is in [`docs/agent-snippet.md`](docs/agent-snippet.md)). Agents running in Pi use the extension in [`pi-extension/`](pi-extension/README.md) instead: it delivers channel messages to the agent directly. In short, the agent starts its listener in the background and watches its output:
 
 ```
 chatterbox listen --as agentA --channel '#hof'
